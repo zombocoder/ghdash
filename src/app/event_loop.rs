@@ -215,6 +215,12 @@ fn spawn_side_effect(
 ) {
     match effect {
         SideEffect::RefreshAll => {
+            // Invalidate cache so refresh fetches fresh data
+            if let Some(cache) = cache_store
+                && let Err(e) = cache.invalidate_all()
+            {
+                error!(error = %e, "Failed to invalidate cache on refresh");
+            }
             // Spawn org fetches
             for org in &config.github.orgs {
                 spawn_side_effect(
