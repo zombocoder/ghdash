@@ -30,7 +30,7 @@ pub fn render(f: &mut Frame, state: &AppState) {
     widgets::render_status_bar(f, status_area, state);
 
     // Overlays
-    widgets::render_search_overlay(f, body_area, state);
+    widgets::render_search_overlay(f, state);
     if state.error_message.is_some() {
         widgets::render_error_modal(f, f.area(), state);
     }

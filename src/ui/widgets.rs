@@ -346,21 +346,21 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     f.render_widget(bar, area);
 }
 
-pub fn render_search_overlay(f: &mut Frame, area: Rect, state: &AppState) {
+pub fn render_search_overlay(f: &mut Frame, state: &AppState) {
     if !state.search_active {
         return;
     }
 
+    let full = f.area();
     let search_area = Rect {
-        x: area.x,
-        y: area.y + area.height.saturating_sub(3),
-        width: area.width,
+        x: 0,
+        y: full.height.saturating_sub(2),
+        width: full.width,
         height: 1,
     };
 
     let text = format!("/{}", state.search_query);
-    let block = Block::default();
-    let para = Paragraph::new(Span::styled(text, theme::HEADER)).block(block);
+    let para = Paragraph::new(Span::styled(text, theme::HEADER)).style(theme::STATUS_BAR);
     f.render_widget(Clear, search_area);
     f.render_widget(para, search_area);
 }
