@@ -16,7 +16,20 @@ A terminal UI dashboard for monitoring GitHub repositories, pull requests, and y
 
 ## Installation
 
-### From source
+### Homebrew (macOS & Linux)
+
+```sh
+brew install zombocoder/tap/ghdash
+```
+
+Or tap the repo first:
+
+```sh
+brew tap zombocoder/tap https://github.com/zombocoder/ghdash.git
+brew install ghdash
+```
+
+### pkgsrc (NetBSD & others)
 
 ```sh
 cargo install --path .
@@ -29,6 +42,12 @@ Download a prebuilt binary from the [Releases](https://github.com/zombocoder/ghd
 - macOS (Intel & Apple Silicon)
 - Linux (x86_64 & aarch64)
 - Windows (x86_64)
+
+### From source
+
+```sh
+cargo install --path .
+```
 
 ### Build from source
 
@@ -98,25 +117,25 @@ ghdash --help              # Show all options
 
 ## Keybindings
 
-| Key | Action |
-|---|---|
-| `j` / `Down` | Move down |
-| `k` / `Up` | Move up |
-| `Enter` / `l` / `Right` | Select / expand / open PR |
-| `Esc` / `h` / `Left` | Back / collapse |
-| `Tab` / `Shift+Tab` | Switch between nav and content panes |
-| `r` | Refresh all data |
-| `o` | Open selected item in browser |
-| `/` | Toggle search filter |
-| `q` / `Ctrl+C` | Quit |
+| Key                     | Action                               |
+| ----------------------- | ------------------------------------ |
+| `j` / `Down`            | Move down                            |
+| `k` / `Up`              | Move up                              |
+| `Enter` / `l` / `Right` | Select / expand / open PR            |
+| `Esc` / `h` / `Left`    | Back / collapse                      |
+| `Tab` / `Shift+Tab`     | Switch between nav and content panes |
+| `r`                     | Refresh all data                     |
+| `o`                     | Open selected item in browser        |
+| `/`                     | Toggle search filter                 |
+| `q` / `Ctrl+C`          | Quit                                 |
 
 ### In search mode
 
-| Key | Action |
-|---|---|
-| Type | Filter PRs by title, author, or repo |
-| `Backspace` | Delete character |
-| `Esc` / `Enter` | Close search |
+| Key             | Action                               |
+| --------------- | ------------------------------------ |
+| Type            | Filter PRs by title, author, or repo |
+| `Backspace`     | Delete character                     |
+| `Esc` / `Enter` | Close search                         |
 
 ## Architecture
 
