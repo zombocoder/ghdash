@@ -19,12 +19,6 @@ A terminal UI dashboard for monitoring GitHub repositories, pull requests, and y
 ### Homebrew (macOS & Linux)
 
 ```sh
-brew install zombocoder/tap/ghdash
-```
-
-Or tap the repo first:
-
-```sh
 brew tap zombocoder/tap https://github.com/zombocoder/ghdash.git
 brew install ghdash
 ```
