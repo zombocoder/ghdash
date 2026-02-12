@@ -1,7 +1,7 @@
 class Ghdash < Formula
   desc "TUI GitHub dashboard for monitoring repos, PRs, and review inbox"
   homepage "https://github.com/zombocoder/ghdash"
-  version "0.3.0"
+  version "0.3.1"
   license "Apache-2.0"
 
   on_macos do
