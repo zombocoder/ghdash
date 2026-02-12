@@ -1,5 +1,10 @@
 # ghdash
 
+[![CI](https://github.com/zombocoder/ghdash/actions/workflows/ci.yml/badge.svg)](https://github.com/zombocoder/ghdash/actions/workflows/ci.yml)
+[![Release](https://github.com/zombocoder/ghdash/actions/workflows/release.yml/badge.svg)](https://github.com/zombocoder/ghdash/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/zombocoder/ghdash)](https://github.com/zombocoder/ghdash/releases/latest)
+[![License](https://img.shields.io/github/license/zombocoder/ghdash)](LICENSE)
+
 A terminal UI dashboard for monitoring GitHub repositories, pull requests, and your review inbox. Built with Rust, ratatui, and the GitHub GraphQL API.
 
 ## Features
