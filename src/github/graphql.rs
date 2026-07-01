@@ -267,6 +267,69 @@ impl GithubClient {
         let query_string = format!("is:open is:pr archived:false {}", filter);
         self.search_prs(&query_string).await
     }
+
+    /// Fetch on-demand detail for a single PR (fresh merge state, recent commits,
+    /// CI rollup). Used by the detail-on-highlight pane.
+    pub async fn fetch_pr_detail(
+        &self,
+        owner: &str,
+        name: &str,
+        number: u32,
+    ) -> Result<(PrDetail, RateLimit)> {
+        let variables = json!({
+            "owner": owner,
+            "name": name,
+            "number": number,
+        });
+
+        let data = self.query(queries::PR_DETAIL_QUERY, variables).await?;
+        let rate_limit = Self::extract_rate_limit(&data);
+
+        let pr_node = &data["data"]["repository"]["pullRequest"];
+        if pr_node.is_null() {
+            bail!("Pull request {}/{}#{} not found", owner, name, number);
+        }
+
+        Ok((parse_pr_detail(pr_node), rate_limit))
+    }
+}
+
+fn parse_pr_detail(node: &Value) -> PrDetail {
+    let commit_nodes = node["commits"]["nodes"].as_array();
+
+    let commits: Vec<CommitInfo> = commit_nodes
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|n| {
+                    let commit = &n["commit"];
+                    let oid = commit["oid"].as_str()?.to_string();
+                    Some(CommitInfo {
+                        oid,
+                        headline: commit["messageHeadline"].as_str().unwrap_or("").to_string(),
+                        committed_date: commit["committedDate"]
+                            .as_str()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or_default(),
+                        author: commit["author"]["name"].as_str().unwrap_or("").to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // GitHub returns commits oldest-first; the CI rollup on the newest (last) commit
+    // reflects the PR's current check status.
+    let checks_status = commit_nodes
+        .and_then(|arr| arr.last())
+        .and_then(|n| n["commit"]["statusCheckRollup"]["state"].as_str())
+        .map(|s| s.to_string());
+
+    PrDetail {
+        mergeable: node["mergeable"].as_str().map(|s| s.to_string()),
+        merge_state_status: node["mergeStateStatus"].as_str().map(|s| s.to_string()),
+        checks_status,
+        commits,
+    }
 }
 
 fn parse_search_pr(node: &Value) -> PullRequest {

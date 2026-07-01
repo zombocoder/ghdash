@@ -1,5 +1,5 @@
 use crate::app::actions::{Action, DataPayload, SideEffect};
-use crate::app::state::{AppState, ContentView, FocusedPane, NavNode, OrgData};
+use crate::app::state::{AppState, ContentView, FocusedPane, NavNode, OrgData, PrDetailEntry};
 
 pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
     match action {
@@ -83,6 +83,8 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
                 state.search_query.clear();
             } else if state.error_message.is_some() {
                 state.error_message = None;
+            } else if state.detail_open {
+                state.detail_open = false;
             } else if state.focused_pane == FocusedPane::Content {
                 state.focused_pane = FocusedPane::Navigation;
             }
@@ -98,6 +100,8 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
         Action::Refresh => {
             state.loading = true;
             state.error_message = None;
+            // Drop cached PR details so merge state / CI is recomputed fresh.
+            state.pr_details.clear();
             vec![SideEffect::RefreshAll]
         }
         Action::OpenInBrowser => {
@@ -119,6 +123,12 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
                 state.search_active = true;
                 state.search_query.clear();
             }
+            vec![]
+        }
+        Action::ToggleDetail => {
+            // Only meaningful in the content pane; the event loop fetches detail
+            // for the highlighted PR (debounced) while the pane is open.
+            state.detail_open = !state.detail_open;
             vec![]
         }
         Action::SearchInput(ch) => {
@@ -159,6 +169,27 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
                 DataPayload::AllOpenPrs { prs, rate_limit } => {
                     state.rate_limit = rate_limit;
                     state.all_open_prs = prs;
+                }
+                DataPayload::PrDetailLoaded {
+                    key,
+                    detail,
+                    rate_limit,
+                } => {
+                    state.rate_limit = rate_limit;
+                    // Upgrade the list column to the freshly computed merge state.
+                    state.apply_fresh_merge_state(
+                        &key,
+                        detail.mergeable.clone(),
+                        detail.merge_state_status.clone(),
+                    );
+                    state.pr_details.insert(key, PrDetailEntry::Loaded(detail));
+                    // A detail fetch is not part of the initial load; leave the
+                    // global loading flag untouched by returning early.
+                    return vec![];
+                }
+                DataPayload::PrDetailFailed { key, msg } => {
+                    state.pr_details.insert(key, PrDetailEntry::Failed(msg));
+                    return vec![];
                 }
             }
 

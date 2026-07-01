@@ -141,3 +141,33 @@ query($query: String!, $cursor: String) {
   }
 }
 "#;
+
+/// Detail for a single PR, fetched on-demand when a row is highlighted.
+/// Accessing the PR directly (vs. the search API) makes GitHub compute a fresh
+/// `mergeable`/`mergeStateStatus`, and lets us pull the recent commits + CI rollup.
+pub const PR_DETAIL_QUERY: &str = r#"
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      mergeable
+      mergeStateStatus
+      commits(last: 5) {
+        nodes {
+          commit {
+            oid
+            messageHeadline
+            committedDate
+            author { name }
+            statusCheckRollup { state }
+          }
+        }
+      }
+    }
+  }
+  rateLimit {
+    remaining
+    limit
+    resetAt
+  }
+}
+"#;

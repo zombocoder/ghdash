@@ -56,6 +56,35 @@ impl PullRequest {
     }
 }
 
+/// A single commit shown in the PR detail pane ("git log").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitInfo {
+    pub oid: String,
+    pub headline: String,
+    pub committed_date: DateTime<Utc>,
+    pub author: String,
+}
+
+impl CommitInfo {
+    /// Short 7-char SHA for display.
+    pub fn short_oid(&self) -> &str {
+        let end = self.oid.len().min(7);
+        &self.oid[..end]
+    }
+}
+
+/// On-demand detail for a single PR, fetched when its row is highlighted.
+/// Unlike the list, this forces GitHub to compute a fresh `mergeable`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrDetail {
+    pub mergeable: Option<String>,
+    pub merge_state_status: Option<String>,
+    /// `statusCheckRollup.state`: `SUCCESS` / `FAILURE` / `PENDING` / `ERROR` / `EXPECTED`.
+    pub checks_status: Option<String>,
+    /// Recent commits, oldest-first as returned by GitHub (`commits(last: N)`).
+    pub commits: Vec<CommitInfo>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RateLimit {
     pub remaining: u32,

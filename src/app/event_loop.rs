@@ -91,12 +91,41 @@ async fn run_loop(
     // First tick fires immediately (already handled by initial fetch above)
     refresh_timer.tick().await;
 
+    // PR detail debounce: when the highlighted PR changes while the detail pane is
+    // open, wait for ~200ms of stable selection before fetching, so holding j/k
+    // does not spray API calls. Starts far in the future (disarmed).
+    let detail_debounce = tokio::time::sleep(tokio::time::Duration::from_secs(86_400));
+    tokio::pin!(detail_debounce);
+    let mut armed_key: Option<String> = None;
+    let mut pending_detail: Option<crate::github::PullRequest> = None;
+
     loop {
         // Render
         terminal.draw(|f| view::render(f, &state))?;
 
         if state.should_quit {
             break;
+        }
+
+        // (Re)arm the detail debounce whenever the highlighted PR changes while the
+        // pane is open and we don't already have (or are fetching) its detail.
+        let desired_pr = if state.detail_open {
+            state.selected_pr()
+        } else {
+            None
+        };
+        let desired_key = desired_pr.as_ref().map(|p| p.url.clone());
+        if desired_key != armed_key {
+            armed_key = desired_key;
+            match desired_pr {
+                Some(pr) if !state.pr_details.contains_key(&pr.url) => {
+                    pending_detail = Some(pr);
+                    detail_debounce.as_mut().reset(
+                        tokio::time::Instant::now() + tokio::time::Duration::from_millis(200),
+                    );
+                }
+                _ => pending_detail = None,
+            }
         }
 
         // Wait for events
@@ -151,6 +180,28 @@ async fn run_loop(
                     }
                 }
             }
+            // Debounced PR detail fetch (only polled while a fetch is pending)
+            _ = &mut detail_debounce, if pending_detail.is_some() => {
+                if let Some(pr) = pending_detail.take() {
+                    state
+                        .pr_details
+                        .insert(pr.url.clone(), crate::app::state::PrDetailEntry::Loading);
+                    spawn_side_effect(
+                        SideEffect::FetchPrDetail {
+                            owner: pr.repo_owner.clone(),
+                            name: pr.repo_name.clone(),
+                            number: pr.number,
+                            key: pr.url.clone(),
+                        },
+                        &config,
+                        &client,
+                        &viewer_login,
+                        &cache_store,
+                        &action_tx,
+                        &semaphore,
+                    );
+                }
+            }
         }
     }
 
@@ -199,6 +250,7 @@ fn map_event_to_action(event: &Event, state: &AppState) -> Option<Action> {
         KeyCode::BackTab => Some(Action::SwitchPane),
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('o') => Some(Action::OpenInBrowser),
+        KeyCode::Char('d') => Some(Action::ToggleDetail),
         KeyCode::Char('/') => Some(Action::ToggleSearch),
         _ => None,
     }
@@ -466,6 +518,38 @@ fn spawn_side_effect(
                             "Failed to fetch all open PRs: {}",
                             e
                         )));
+                    }
+                }
+            });
+        }
+        SideEffect::FetchPrDetail {
+            owner,
+            name,
+            number,
+            key,
+        } => {
+            let client = client.clone();
+            let tx = action_tx.clone();
+            let sem = semaphore.clone();
+
+            tokio::spawn(async move {
+                let _permit = sem.acquire().await;
+                debug!(owner = %owner, name = %name, number = number, "Fetching PR detail");
+
+                match client.fetch_pr_detail(&owner, &name, number).await {
+                    Ok((detail, rate_limit)) => {
+                        let _ = tx.send(Action::DataLoaded(DataPayload::PrDetailLoaded {
+                            key,
+                            detail,
+                            rate_limit,
+                        }));
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to fetch PR detail");
+                        let _ = tx.send(Action::DataLoaded(DataPayload::PrDetailFailed {
+                            key,
+                            msg: format!("{}", e),
+                        }));
                     }
                 }
             });

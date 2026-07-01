@@ -1,6 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::github::models::{PullRequest, RateLimit, Repo};
+use crate::github::models::{PrDetail, PullRequest, RateLimit, Repo};
+
+/// State of an on-demand PR detail fetch, keyed by PR url in `AppState::pr_details`.
+#[derive(Debug, Clone)]
+pub enum PrDetailEntry {
+    Loading,
+    Loaded(PrDetail),
+    Failed(String),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FocusedPane {
@@ -58,6 +66,10 @@ pub struct AppState {
     pub search_active: bool,
     pub search_query: String,
 
+    // PR detail pane (fetched on-highlight)
+    pub detail_open: bool,
+    pub pr_details: HashMap<String, PrDetailEntry>,
+
     // UI flags
     pub loading: bool,
     pub loading_orgs: HashSet<String>,
@@ -96,6 +108,8 @@ impl AppState {
             content_cursor: 0,
             search_active: false,
             search_query: String::new(),
+            detail_open: false,
+            pr_details: HashMap::new(),
             loading: true,
             loading_orgs: HashSet::new(),
             error_message: None,
@@ -186,6 +200,27 @@ impl AppState {
     pub fn selected_pr_url(&self) -> Option<String> {
         let prs = self.current_pr_list();
         prs.get(self.content_cursor).map(|pr| pr.url.clone())
+    }
+
+    /// The currently highlighted PR (in the content pane), cloned.
+    pub fn selected_pr(&self) -> Option<PullRequest> {
+        self.current_pr_list().into_iter().nth(self.content_cursor)
+    }
+
+    /// Apply a freshly fetched merge state to the matching PR in every list, so
+    /// the list column reflects the authoritative value once detail resolves.
+    pub fn apply_fresh_merge_state(
+        &mut self,
+        url: &str,
+        mergeable: Option<String>,
+        merge_state_status: Option<String>,
+    ) {
+        for pr in self.all_open_prs.iter_mut().chain(self.inbox.iter_mut()) {
+            if pr.url == url {
+                pr.mergeable = mergeable.clone();
+                pr.merge_state_status = merge_state_status.clone();
+            }
+        }
     }
 
     pub fn selected_nav_url(&self) -> Option<String> {
