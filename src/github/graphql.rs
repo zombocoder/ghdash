@@ -245,7 +245,7 @@ impl GithubClient {
         }
 
         // Sort by updated_at descending
-        inbox.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        inbox.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
 
         debug!(count = inbox.len(), "Fetched inbox");
         Ok((inbox, rate_limit))
