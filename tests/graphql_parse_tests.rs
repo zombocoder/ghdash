@@ -28,6 +28,8 @@ fn test_pr_repo_full_name() {
         additions: 0,
         deletions: 0,
         review_decision: None,
+        mergeable: None,
+        merge_state_status: None,
         labels: vec![],
     };
     assert_eq!(pr.repo_full_name(), "org/repo");
@@ -69,6 +71,8 @@ fn test_pr_serialization_roundtrip() {
         additions: 100,
         deletions: 50,
         review_decision: Some("APPROVED".into()),
+        mergeable: Some("MERGEABLE".into()),
+        merge_state_status: Some("CLEAN".into()),
         labels: vec!["bug".into(), "urgent".into()],
     };
 
@@ -80,6 +84,8 @@ fn test_pr_serialization_roundtrip() {
     assert_eq!(deserialized.author, "alice");
     assert!(deserialized.is_draft);
     assert_eq!(deserialized.review_decision, Some("APPROVED".into()));
+    assert_eq!(deserialized.mergeable, Some("MERGEABLE".into()));
+    assert_eq!(deserialized.merge_state_status, Some("CLEAN".into()));
     assert_eq!(deserialized.labels, vec!["bug", "urgent"]);
 }
 
@@ -121,9 +127,64 @@ fn test_pr_with_no_review_decision() {
         additions: 0,
         deletions: 0,
         review_decision: None,
+        mergeable: None,
+        merge_state_status: None,
         labels: vec![],
     };
 
     assert!(pr.review_decision.is_none());
     assert!(pr.labels.is_empty());
+}
+
+#[test]
+fn test_pr_deserializes_without_merge_fields() {
+    // Older cache entries won't have mergeable / mergeStateStatus. #[serde(default)]
+    // must let them deserialize to None rather than failing (which would drop the
+    // whole cache entry). Guards the CI-3 cache-schema-evolution concern.
+    let legacy = r#"{
+        "number": 7,
+        "title": "Legacy cached PR",
+        "author": "bob",
+        "repo_owner": "org",
+        "repo_name": "repo",
+        "url": "https://github.com/org/repo/pull/7",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+        "is_draft": false,
+        "additions": 3,
+        "deletions": 1,
+        "review_decision": null,
+        "labels": []
+    }"#;
+
+    let pr: PullRequest = serde_json::from_str(legacy).expect("legacy cache must deserialize");
+    assert_eq!(pr.number, 7);
+    assert!(pr.mergeable.is_none());
+    assert!(pr.merge_state_status.is_none());
+}
+
+#[test]
+fn test_pr_conflicting_merge_state_roundtrip() {
+    let pr = PullRequest {
+        number: 9,
+        title: "Conflicting PR".into(),
+        author: "carol".into(),
+        repo_owner: "org".into(),
+        repo_name: "repo".into(),
+        url: "https://github.com/org/repo/pull/9".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        is_draft: false,
+        additions: 1,
+        deletions: 1,
+        review_decision: None,
+        mergeable: Some("CONFLICTING".into()),
+        merge_state_status: Some("DIRTY".into()),
+        labels: vec![],
+    };
+
+    let json = serde_json::to_string(&pr).unwrap();
+    let deserialized: PullRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.mergeable, Some("CONFLICTING".into()));
+    assert_eq!(deserialized.merge_state_status, Some("DIRTY".into()));
 }

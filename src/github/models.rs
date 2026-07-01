@@ -38,6 +38,16 @@ pub struct PullRequest {
     pub deletions: u32,
     pub review_decision: Option<String>,
     pub labels: Vec<String>,
+    /// GitHub `mergeable` enum: `MERGEABLE` / `CONFLICTING` / `UNKNOWN`.
+    /// `None` when absent (e.g. older cache entries). Note: GitHub computes this
+    /// lazily, so the search API frequently returns `UNKNOWN`.
+    #[serde(default)]
+    pub mergeable: Option<String>,
+    /// GitHub `mergeStateStatus` enum: `CLEAN` / `DIRTY` / `BLOCKED` / `BEHIND` /
+    /// `UNSTABLE` / `HAS_HOOKS` / `DRAFT` / `UNKNOWN`. Richer than `mergeable`;
+    /// same lazy-compute caveat.
+    #[serde(default)]
+    pub merge_state_status: Option<String>,
 }
 
 impl PullRequest {

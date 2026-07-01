@@ -35,6 +35,8 @@ fn make_pr(repo_owner: &str, repo_name: &str, number: u32, title: &str) -> PullR
         additions: 10,
         deletions: 5,
         review_decision: None,
+        mergeable: None,
+        merge_state_status: None,
         labels: vec![],
     }
 }

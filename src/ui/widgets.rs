@@ -6,6 +6,7 @@ use ratatui::{
 };
 
 use crate::app::state::{AppState, ContentView, FocusedPane, NavNode};
+use crate::github::models::PullRequest;
 use crate::ui::theme;
 use crate::util::time::relative_time;
 
@@ -114,6 +115,17 @@ pub fn render_content_pane(f: &mut Frame, area: Rect, state: &AppState) {
     }
 }
 
+/// Compact, colorblind-safe label + color for a PR's merge state.
+/// Driven by GitHub's `mergeable` enum; `UNKNOWN`/absent renders as a dim `?`
+/// because the search API computes `mergeable` lazily (often `UNKNOWN` at first).
+fn merge_state_display(pr: &PullRequest) -> (&'static str, ratatui::style::Style) {
+    match pr.mergeable.as_deref() {
+        Some("MERGEABLE") => ("✓ ok", theme::MERGE_CLEAN),
+        Some("CONFLICTING") => ("✗ cf", theme::MERGE_CONFLICT),
+        _ => ("?", theme::DIM),
+    }
+}
+
 fn render_pr_table(
     f: &mut Frame,
     area: Rect,
@@ -151,6 +163,7 @@ fn render_pr_table(
 
     let header = Row::new(vec![
         Cell::from("#").style(theme::HEADER),
+        Cell::from("State").style(theme::HEADER),
         Cell::from("Title").style(theme::HEADER),
         Cell::from("Author").style(theme::HEADER),
         Cell::from("Repo").style(theme::HEADER),
@@ -176,11 +189,18 @@ fn render_pr_table(
                 _ => "",
             };
 
+            let (merge_label, merge_style) = merge_state_display(pr);
+
             Row::new(vec![
                 Cell::from(format!("#{}", pr.number)).style(if style == theme::HIGHLIGHT {
                     style
                 } else {
                     theme::PR_NUMBER
+                }),
+                Cell::from(merge_label).style(if style == theme::HIGHLIGHT {
+                    style
+                } else {
+                    merge_style
                 }),
                 Cell::from(format!(
                     "{}{}{}",
@@ -207,6 +227,7 @@ fn render_pr_table(
 
     let widths = [
         Constraint::Length(7),
+        Constraint::Length(5),
         Constraint::Min(20),
         Constraint::Length(16),
         Constraint::Length(24),
