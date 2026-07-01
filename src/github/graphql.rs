@@ -37,20 +37,37 @@ impl GithubClient {
             "variables": variables,
         });
 
-        let resp = self
-            .client
-            .post(&self.api_url)
-            .bearer_auth(&self.token)
-            .json(&body)
-            .send()
-            .await
-            .context("GitHub API request failed")?;
+        // GitHub's GraphQL/search endpoint returns transient 5xx (commonly 502)
+        // under load, especially for broad searches over many repos. Retry a few
+        // times with backoff before surfacing the error.
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut attempt = 0;
+        let resp = loop {
+            attempt += 1;
+            let resp = self
+                .client
+                .post(&self.api_url)
+                .bearer_auth(&self.token)
+                .json(&body)
+                .send()
+                .await
+                .context("GitHub API request failed")?;
 
-        let status = resp.status();
-        if !status.is_success() {
+            let status = resp.status();
+            if status.is_success() {
+                break resp;
+            }
+
+            if status.is_server_error() && attempt < MAX_ATTEMPTS {
+                let backoff = std::time::Duration::from_millis(500 * u64::from(attempt));
+                debug!(%status, attempt, "GitHub API server error, retrying");
+                tokio::time::sleep(backoff).await;
+                continue;
+            }
+
             let text = resp.text().await.unwrap_or_default();
             bail!("GitHub API returned {}: {}", status, text);
-        }
+        };
 
         let data: Value = resp
             .json()
@@ -291,6 +308,48 @@ impl GithubClient {
         }
 
         Ok((parse_pr_detail(pr_node), rate_limit))
+    }
+
+    /// REST v3 base URL, derived from the configured GraphQL `api_url`.
+    /// `https://api.github.com/graphql` → `https://api.github.com`;
+    /// Enterprise `https://host/api/graphql` → `https://host/api/v3`.
+    fn rest_base(&self) -> String {
+        match self.api_url.strip_suffix("/graphql") {
+            Some(base) if base.ends_with("/api") => format!("{}/v3", base),
+            Some(base) => base.to_string(),
+            None => "https://api.github.com".to_string(),
+        }
+    }
+
+    /// Fetch the full unified diff for a single PR via the REST API
+    /// (`Accept: application/vnd.github.v3.diff`), used by the diff overlay.
+    pub async fn fetch_pr_diff(&self, owner: &str, name: &str, number: u32) -> Result<String> {
+        let url = format!(
+            "{}/repos/{}/{}/pulls/{}",
+            self.rest_base(),
+            owner,
+            name,
+            number
+        );
+
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(&self.token)
+            .header(reqwest::header::ACCEPT, "application/vnd.github.v3.diff")
+            .send()
+            .await
+            .context("GitHub diff request failed")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            bail!("GitHub API returned {}: {}", status, text);
+        }
+
+        let diff = resp.text().await.context("Failed to read PR diff")?;
+        debug!(owner, name, number, bytes = diff.len(), "Fetched PR diff");
+        Ok(diff)
     }
 }
 

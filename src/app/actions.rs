@@ -11,7 +11,9 @@ pub enum Action {
     Refresh,
     OpenInBrowser,
     ToggleSearch,
-    ToggleDetail,
+    ToggleGitLog,
+    ToggleDiff,
+    CloseOverlay,
     SearchInput(char),
     SearchBackspace,
     SearchClear,
@@ -47,6 +49,15 @@ pub enum DataPayload {
         key: String,
         msg: String,
     },
+    PrDiffLoaded {
+        /// PR url — the key into `AppState::pr_diffs`.
+        key: String,
+        diff: String,
+    },
+    PrDiffFailed {
+        key: String,
+        msg: String,
+    },
 }
 
 #[derive(Debug)]
@@ -57,6 +68,13 @@ pub enum SideEffect {
     FetchInbox,
     FetchAllOpenPrs,
     FetchPrDetail {
+        owner: String,
+        name: String,
+        number: u32,
+        /// PR url — echoed back so the result can be stored under the right key.
+        key: String,
+    },
+    FetchPrDiff {
         owner: String,
         name: String,
         number: u32,

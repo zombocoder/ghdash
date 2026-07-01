@@ -1,5 +1,7 @@
 use crate::app::actions::{Action, DataPayload, SideEffect};
-use crate::app::state::{AppState, ContentView, FocusedPane, NavNode, OrgData, PrDetailEntry};
+use crate::app::state::{
+    AppState, ContentView, DiffEntry, FocusedPane, NavNode, OrgData, Overlay, PrDetailEntry,
+};
 
 pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
     match action {
@@ -8,6 +10,15 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
             vec![]
         }
         Action::MoveUp => {
+            // While the diff overlay is open, j/k scroll the diff instead of moving
+            // the underlying selection.
+            if state.overlay == Overlay::Diff {
+                state.diff_scroll = state.diff_scroll.saturating_sub(1);
+                return vec![];
+            }
+            if state.overlay == Overlay::GitLog {
+                return vec![];
+            }
             match state.focused_pane {
                 FocusedPane::Navigation => {
                     if state.nav_cursor > 0 {
@@ -23,6 +34,13 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
             vec![]
         }
         Action::MoveDown => {
+            if state.overlay == Overlay::Diff {
+                state.diff_scroll = state.diff_scroll.saturating_add(1);
+                return vec![];
+            }
+            if state.overlay == Overlay::GitLog {
+                return vec![];
+            }
             match state.focused_pane {
                 FocusedPane::Navigation => {
                     if state.nav_cursor + 1 < state.nav_nodes.len() {
@@ -83,8 +101,8 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
                 state.search_query.clear();
             } else if state.error_message.is_some() {
                 state.error_message = None;
-            } else if state.detail_open {
-                state.detail_open = false;
+            } else if state.overlay != Overlay::None {
+                state.overlay = Overlay::None;
             } else if state.focused_pane == FocusedPane::Content {
                 state.focused_pane = FocusedPane::Navigation;
             }
@@ -100,8 +118,9 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
         Action::Refresh => {
             state.loading = true;
             state.error_message = None;
-            // Drop cached PR details so merge state / CI is recomputed fresh.
+            // Drop cached PR details / diffs so they are re-fetched fresh.
             state.pr_details.clear();
+            state.pr_diffs.clear();
             vec![SideEffect::RefreshAll]
         }
         Action::OpenInBrowser => {
@@ -125,10 +144,27 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
             }
             vec![]
         }
-        Action::ToggleDetail => {
-            // Only meaningful in the content pane; the event loop fetches detail
-            // for the highlighted PR (debounced) while the pane is open.
-            state.detail_open = !state.detail_open;
+        Action::ToggleGitLog => {
+            // Only meaningful in the content pane; the event loop fetches the PR's
+            // commits (debounced) while the overlay is open.
+            state.overlay = if state.overlay == Overlay::GitLog {
+                Overlay::None
+            } else {
+                Overlay::GitLog
+            };
+            vec![]
+        }
+        Action::ToggleDiff => {
+            state.diff_scroll = 0;
+            state.overlay = if state.overlay == Overlay::Diff {
+                Overlay::None
+            } else {
+                Overlay::Diff
+            };
+            vec![]
+        }
+        Action::CloseOverlay => {
+            state.overlay = Overlay::None;
             vec![]
         }
         Action::SearchInput(ch) => {
@@ -189,6 +225,14 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
                 }
                 DataPayload::PrDetailFailed { key, msg } => {
                     state.pr_details.insert(key, PrDetailEntry::Failed(msg));
+                    return vec![];
+                }
+                DataPayload::PrDiffLoaded { key, diff } => {
+                    state.pr_diffs.insert(key, DiffEntry::Loaded(diff));
+                    return vec![];
+                }
+                DataPayload::PrDiffFailed { key, msg } => {
+                    state.pr_diffs.insert(key, DiffEntry::Failed(msg));
                     return vec![];
                 }
             }

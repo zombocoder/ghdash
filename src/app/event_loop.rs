@@ -13,7 +13,7 @@ use tokio::sync::{Semaphore, mpsc};
 use tracing::{debug, error};
 
 use crate::app::actions::{Action, DataPayload, SideEffect};
-use crate::app::state::AppState;
+use crate::app::state::{AppState, DiffEntry, FocusedPane, Overlay, PrDetailEntry};
 use crate::app::update::update;
 use crate::app::view;
 use crate::cache::CacheStore;
@@ -96,8 +96,8 @@ async fn run_loop(
     // does not spray API calls. Starts far in the future (disarmed).
     let detail_debounce = tokio::time::sleep(tokio::time::Duration::from_secs(86_400));
     tokio::pin!(detail_debounce);
-    let mut armed_key: Option<String> = None;
-    let mut pending_detail: Option<crate::github::PullRequest> = None;
+    let mut armed_key: Option<(String, Overlay)> = None;
+    let mut pending_fetch: Option<(crate::github::PullRequest, Overlay)> = None;
 
     loop {
         // Render
@@ -107,24 +107,28 @@ async fn run_loop(
             break;
         }
 
-        // (Re)arm the detail debounce whenever the highlighted PR changes while the
-        // pane is open and we don't already have (or are fetching) its detail.
-        let desired_pr = if state.detail_open {
+        // (Re)arm the debounce whenever the highlighted PR or the open overlay
+        // changes and we don't already have (or are fetching) the data it needs.
+        let desired_pr = if state.overlay != Overlay::None {
             state.selected_pr()
         } else {
             None
         };
-        let desired_key = desired_pr.as_ref().map(|p| p.url.clone());
+        let desired_key = desired_pr.as_ref().map(|p| (p.url.clone(), state.overlay));
         if desired_key != armed_key {
             armed_key = desired_key;
-            match desired_pr {
-                Some(pr) if !state.pr_details.contains_key(&pr.url) => {
-                    pending_detail = Some(pr);
-                    detail_debounce.as_mut().reset(
-                        tokio::time::Instant::now() + tokio::time::Duration::from_millis(200),
-                    );
-                }
-                _ => pending_detail = None,
+            let needs_fetch = match (&desired_pr, state.overlay) {
+                (Some(pr), Overlay::GitLog) => !state.pr_details.contains_key(&pr.url),
+                (Some(pr), Overlay::Diff) => !state.pr_diffs.contains_key(&pr.url),
+                _ => false,
+            };
+            if needs_fetch {
+                pending_fetch = desired_pr.map(|pr| (pr, state.overlay));
+                detail_debounce
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + tokio::time::Duration::from_millis(200));
+            } else {
+                pending_fetch = None;
             }
         }
 
@@ -180,19 +184,32 @@ async fn run_loop(
                     }
                 }
             }
-            // Debounced PR detail fetch (only polled while a fetch is pending)
-            _ = &mut detail_debounce, if pending_detail.is_some() => {
-                if let Some(pr) = pending_detail.take() {
-                    state
-                        .pr_details
-                        .insert(pr.url.clone(), crate::app::state::PrDetailEntry::Loading);
+            // Debounced overlay fetch (only polled while a fetch is pending)
+            _ = &mut detail_debounce, if pending_fetch.is_some() => {
+                if let Some((pr, overlay)) = pending_fetch.take() {
+                    let effect = match overlay {
+                        Overlay::GitLog => {
+                            state.pr_details.insert(pr.url.clone(), PrDetailEntry::Loading);
+                            SideEffect::FetchPrDetail {
+                                owner: pr.repo_owner.clone(),
+                                name: pr.repo_name.clone(),
+                                number: pr.number,
+                                key: pr.url.clone(),
+                            }
+                        }
+                        Overlay::Diff => {
+                            state.pr_diffs.insert(pr.url.clone(), DiffEntry::Loading);
+                            SideEffect::FetchPrDiff {
+                                owner: pr.repo_owner.clone(),
+                                name: pr.repo_name.clone(),
+                                number: pr.number,
+                                key: pr.url.clone(),
+                            }
+                        }
+                        Overlay::None => continue,
+                    };
                     spawn_side_effect(
-                        SideEffect::FetchPrDetail {
-                            owner: pr.repo_owner.clone(),
-                            name: pr.repo_name.clone(),
-                            number: pr.number,
-                            key: pr.url.clone(),
-                        },
+                        effect,
                         &config,
                         &client,
                         &viewer_login,
@@ -238,19 +255,42 @@ fn map_event_to_action(event: &Event, state: &AppState) -> Option<Action> {
         };
     }
 
+    // Handle an open overlay (git log / diff): keys act on the overlay itself, so
+    // l/d switch between views, j/k scroll (diff), and Esc/h close.
+    if state.overlay != Overlay::None {
+        return match code {
+            KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => Some(Action::CloseOverlay),
+            KeyCode::Char('l') => Some(Action::ToggleGitLog),
+            KeyCode::Char('d') => Some(Action::ToggleDiff),
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::MoveDown),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::MoveUp),
+            KeyCode::Char('o') => Some(Action::OpenInBrowser),
+            KeyCode::Char('q') => Some(Action::Quit),
+            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
+            _ => None,
+        };
+    }
+
+    let in_content = state.focused_pane == FocusedPane::Content;
+
     // Normal mode
     match code {
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
         KeyCode::Char('j') | KeyCode::Down => Some(Action::MoveDown),
         KeyCode::Char('k') | KeyCode::Up => Some(Action::MoveUp),
-        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => Some(Action::Select),
+        KeyCode::Enter | KeyCode::Right => Some(Action::Select),
+        // In the content pane, `l` opens the git-log overlay for the highlighted
+        // PR; in the nav tree it keeps its vim-style expand/select meaning.
+        KeyCode::Char('l') if in_content => Some(Action::ToggleGitLog),
+        KeyCode::Char('l') => Some(Action::Select),
+        // `d` opens the diff overlay, content pane only.
+        KeyCode::Char('d') if in_content => Some(Action::ToggleDiff),
         KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => Some(Action::Back),
         KeyCode::Tab => Some(Action::SwitchPane),
         KeyCode::BackTab => Some(Action::SwitchPane),
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('o') => Some(Action::OpenInBrowser),
-        KeyCode::Char('d') => Some(Action::ToggleDetail),
         KeyCode::Char('/') => Some(Action::ToggleSearch),
         _ => None,
     }
@@ -547,6 +587,35 @@ fn spawn_side_effect(
                     Err(e) => {
                         error!(error = %e, "Failed to fetch PR detail");
                         let _ = tx.send(Action::DataLoaded(DataPayload::PrDetailFailed {
+                            key,
+                            msg: format!("{}", e),
+                        }));
+                    }
+                }
+            });
+        }
+        SideEffect::FetchPrDiff {
+            owner,
+            name,
+            number,
+            key,
+        } => {
+            let client = client.clone();
+            let tx = action_tx.clone();
+            let sem = semaphore.clone();
+
+            tokio::spawn(async move {
+                let _permit = sem.acquire().await;
+                debug!(owner = %owner, name = %name, number = number, "Fetching PR diff");
+
+                match client.fetch_pr_diff(&owner, &name, number).await {
+                    Ok(diff) => {
+                        let _ =
+                            tx.send(Action::DataLoaded(DataPayload::PrDiffLoaded { key, diff }));
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to fetch PR diff");
+                        let _ = tx.send(Action::DataLoaded(DataPayload::PrDiffFailed {
                             key,
                             msg: format!("{}", e),
                         }));

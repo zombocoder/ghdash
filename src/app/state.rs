@@ -10,6 +10,24 @@ pub enum PrDetailEntry {
     Failed(String),
 }
 
+/// State of an on-demand PR diff fetch, keyed by PR url in `AppState::pr_diffs`.
+#[derive(Debug, Clone)]
+pub enum DiffEntry {
+    Loading,
+    Loaded(String),
+    Failed(String),
+}
+
+/// Which full-screen overlay (if any) is shown for the highlighted PR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    None,
+    /// Recent commits for the PR ("git log").
+    GitLog,
+    /// Full unified diff for the PR.
+    Diff,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FocusedPane {
     Navigation,
@@ -66,9 +84,12 @@ pub struct AppState {
     pub search_active: bool,
     pub search_query: String,
 
-    // PR detail pane (fetched on-highlight)
-    pub detail_open: bool,
+    // PR overlays (git log / diff), fetched on-highlight while open
+    pub overlay: Overlay,
     pub pr_details: HashMap<String, PrDetailEntry>,
+    pub pr_diffs: HashMap<String, DiffEntry>,
+    /// Vertical scroll offset (in lines) for the diff overlay.
+    pub diff_scroll: u16,
 
     // UI flags
     pub loading: bool,
@@ -108,8 +129,10 @@ impl AppState {
             content_cursor: 0,
             search_active: false,
             search_query: String::new(),
-            detail_open: false,
+            overlay: Overlay::None,
             pr_details: HashMap::new(),
+            pr_diffs: HashMap::new(),
+            diff_scroll: 0,
             loading: true,
             loading_orgs: HashSet::new(),
             error_message: None,

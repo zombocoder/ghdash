@@ -1,5 +1,5 @@
 use ghdash::app::actions::{Action, DataPayload, SideEffect};
-use ghdash::app::state::{AppState, ContentView, FocusedPane, NavNode};
+use ghdash::app::state::{AppState, ContentView, FocusedPane, NavNode, Overlay};
 use ghdash::app::update::update;
 use ghdash::github::models::{PullRequest, RateLimit, Repo};
 
@@ -472,28 +472,47 @@ fn test_archived_repos_excluded_from_nav() {
     assert_eq!(repo_names, vec!["active-repo"]);
 }
 
-// --- PR detail pane (task zkk5) ---
+// --- PR overlays: git log & diff (task zkk5) ---
 
 #[test]
-fn test_toggle_detail_flips_flag() {
+fn test_toggle_git_log_flips_overlay() {
     let mut state = make_state();
-    assert!(!state.detail_open);
-    update(&mut state, Action::ToggleDetail);
-    assert!(state.detail_open);
-    update(&mut state, Action::ToggleDetail);
-    assert!(!state.detail_open);
+    assert_eq!(state.overlay, Overlay::None);
+    update(&mut state, Action::ToggleGitLog);
+    assert_eq!(state.overlay, Overlay::GitLog);
+    update(&mut state, Action::ToggleGitLog);
+    assert_eq!(state.overlay, Overlay::None);
 }
 
 #[test]
-fn test_back_closes_detail_before_switching_pane() {
+fn test_toggle_diff_flips_overlay() {
+    let mut state = make_state();
+    update(&mut state, Action::ToggleDiff);
+    assert_eq!(state.overlay, Overlay::Diff);
+    update(&mut state, Action::ToggleDiff);
+    assert_eq!(state.overlay, Overlay::None);
+}
+
+#[test]
+fn test_toggle_switches_between_overlays() {
+    let mut state = make_state();
+    update(&mut state, Action::ToggleGitLog);
+    assert_eq!(state.overlay, Overlay::GitLog);
+    // Pressing the diff key while the log is open switches to the diff.
+    update(&mut state, Action::ToggleDiff);
+    assert_eq!(state.overlay, Overlay::Diff);
+}
+
+#[test]
+fn test_back_closes_overlay_before_switching_pane() {
     let mut state = make_state();
     state.focused_pane = FocusedPane::Content;
-    update(&mut state, Action::ToggleDetail);
-    assert!(state.detail_open);
+    update(&mut state, Action::ToggleGitLog);
+    assert_eq!(state.overlay, Overlay::GitLog);
 
-    // Back should close the detail pane first, leaving focus on Content.
+    // Back should close the overlay first, leaving focus on Content.
     update(&mut state, Action::Back);
-    assert!(!state.detail_open);
+    assert_eq!(state.overlay, Overlay::None);
     assert_eq!(state.focused_pane, FocusedPane::Content);
 }
 
