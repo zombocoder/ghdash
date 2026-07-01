@@ -31,6 +31,7 @@ pub fn render(f: &mut Frame, state: &AppState) {
 
     // Overlays
     widgets::render_pr_overlay(f, state);
+    widgets::render_help_overlay(f, state);
     widgets::render_search_overlay(f, state);
     if state.error_message.is_some() {
         widgets::render_error_modal(f, f.area(), state);

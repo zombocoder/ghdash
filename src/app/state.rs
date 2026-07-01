@@ -28,6 +28,42 @@ pub enum Overlay {
     Diff,
 }
 
+/// Merge-state filter applied to PR lists. Cycled with the filter key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeFilter {
+    All,
+    Conflicting,
+    Clean,
+}
+
+impl MergeFilter {
+    /// Cycle All -> Conflicting -> Clean -> All.
+    pub fn next(self) -> Self {
+        match self {
+            MergeFilter::All => MergeFilter::Conflicting,
+            MergeFilter::Conflicting => MergeFilter::Clean,
+            MergeFilter::Clean => MergeFilter::All,
+        }
+    }
+
+    /// Short label for the table title; `None` when inactive (All).
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            MergeFilter::All => None,
+            MergeFilter::Conflicting => Some("conflicting"),
+            MergeFilter::Clean => Some("clean"),
+        }
+    }
+
+    fn matches(self, pr: &PullRequest) -> bool {
+        match self {
+            MergeFilter::All => true,
+            MergeFilter::Conflicting => pr.mergeable.as_deref() == Some("CONFLICTING"),
+            MergeFilter::Clean => pr.mergeable.as_deref() == Some("MERGEABLE"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FocusedPane {
     Navigation,
@@ -91,6 +127,10 @@ pub struct AppState {
     /// Vertical scroll offset (in lines) for the diff overlay.
     pub diff_scroll: u16,
 
+    // Merge-state filter + help overlay
+    pub merge_filter: MergeFilter,
+    pub help_open: bool,
+
     // UI flags
     pub loading: bool,
     pub loading_orgs: HashSet<String>,
@@ -133,6 +173,8 @@ impl AppState {
             pr_details: HashMap::new(),
             pr_diffs: HashMap::new(),
             diff_scroll: 0,
+            merge_filter: MergeFilter::All,
+            help_open: false,
             loading: true,
             loading_orgs: HashSet::new(),
             error_message: None,
@@ -186,13 +228,12 @@ impl AppState {
     }
 
     pub fn filtered_prs(&self, prs: &[PullRequest]) -> Vec<PullRequest> {
-        if self.search_query.is_empty() {
-            return prs.to_vec();
-        }
         let query = self.search_query.to_lowercase();
         prs.iter()
+            .filter(|pr| self.merge_filter.matches(pr))
             .filter(|pr| {
-                pr.title.to_lowercase().contains(&query)
+                query.is_empty()
+                    || pr.title.to_lowercase().contains(&query)
                     || pr.author.to_lowercase().contains(&query)
                     || pr.repo_name.to_lowercase().contains(&query)
                     || pr.repo_full_name().to_lowercase().contains(&query)

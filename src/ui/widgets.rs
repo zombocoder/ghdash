@@ -153,8 +153,18 @@ fn render_pr_table(
     } else {
         String::new()
     };
+    let merge_suffix = match state.merge_filter.label() {
+        Some(l) => format!(" [state: {}]", l),
+        None => String::new(),
+    };
 
-    let title = format!(" {} ({}) {} ", title, prs.len(), search_suffix);
+    let title = format!(
+        " {} ({}){}{} ",
+        title,
+        prs.len(),
+        merge_suffix,
+        search_suffix
+    );
 
     let block = Block::default()
         .title(title)
@@ -330,7 +340,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     let key_hints = if state.search_active {
         "Esc: close search | Enter: filter"
     } else {
-        "j/k: nav | Tab: pane | Enter: select | l: log | d: diff | /: search | r: refresh | o: open | q: quit"
+        "j/k: nav | Enter: select | l: log | d: diff | f: filter | /: search | r: refresh | o: open | ?: help | q: quit"
     };
 
     let status = if state.loading {
@@ -633,5 +643,75 @@ fn render_diff_overlay(f: &mut Frame, state: &AppState) {
 
     f.render_widget(Clear, modal_area);
     let para = Paragraph::new(lines).block(block).scroll((scroll, 0));
+    f.render_widget(para, modal_area);
+}
+
+/// Help overlay: keybindings plus the State/CI glyph legends (accessibility — glyphs
+/// are otherwise undocumented). Independent of the per-PR `Overlay` state.
+pub fn render_help_overlay(f: &mut Frame, state: &AppState) {
+    if !state.help_open {
+        return;
+    }
+
+    let area = f.area();
+    let modal_width = 66u16.clamp(40, area.width.saturating_sub(4));
+    let modal_height = 18u16.min(area.height.saturating_sub(2));
+    let x = (area.width.saturating_sub(modal_width)) / 2;
+    let y = (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect {
+        x,
+        y,
+        width: modal_width,
+        height: modal_height,
+    };
+
+    let block = Block::default()
+        .title(" Help ")
+        .borders(Borders::ALL)
+        .border_style(theme::BORDER_FOCUSED);
+
+    let key = |k: &'static str, desc: &'static str| {
+        Line::from(vec![
+            Span::styled(format!("  {:<12}", k), theme::PR_NUMBER),
+            Span::raw(desc),
+        ])
+    };
+
+    let lines = vec![
+        Line::from(Span::styled("Keys", theme::HEADER)),
+        key("j / k", "move up / down (scroll in diff)"),
+        key("Enter", "select / expand"),
+        key("l", "git-log overlay (content pane)"),
+        key("d", "diff overlay (content pane)"),
+        key("f", "cycle merge filter: all -> conflicting -> clean"),
+        key("/", "search    r  refresh    o  open in browser"),
+        key("Tab", "switch pane    h / Esc  back / close    q  quit"),
+        Line::from(""),
+        Line::from(Span::styled("State column", theme::HEADER)),
+        Line::from(vec![
+            Span::styled("  ✓ ok", theme::MERGE_CLEAN),
+            Span::raw(" mergeable   "),
+            Span::styled("✗ cf", theme::MERGE_CONFLICT),
+            Span::raw(" conflicting   "),
+            Span::styled("?", theme::DIM),
+            Span::raw(" unknown (not yet computed)"),
+        ]),
+        Line::from(Span::styled("CI column", theme::HEADER)),
+        Line::from(vec![
+            Span::styled("  ✓", theme::MERGE_CLEAN),
+            Span::raw(" passing   "),
+            Span::styled("✗", theme::MERGE_CONFLICT),
+            Span::raw(" failing   "),
+            Span::styled("…", theme::WARNING),
+            Span::raw(" pending   "),
+            Span::styled("·", theme::DIM),
+            Span::raw(" no checks"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("Press ? or Esc to close", theme::DIM)),
+    ];
+
+    f.render_widget(Clear, modal_area);
+    let para = Paragraph::new(lines).block(block);
     f.render_widget(para, modal_area);
 }

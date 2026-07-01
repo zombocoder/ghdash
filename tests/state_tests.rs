@@ -595,3 +595,78 @@ fn test_pr_detail_failed_records_error() {
         Some(PrDetailEntry::Failed(_))
     ));
 }
+
+// --- Merge-state filter + help (task pp0u) ---
+
+#[test]
+fn test_cycle_merge_filter_order() {
+    use ghdash::app::state::MergeFilter;
+    let mut state = make_state();
+    assert_eq!(state.merge_filter, MergeFilter::All);
+    update(&mut state, Action::CycleMergeFilter);
+    assert_eq!(state.merge_filter, MergeFilter::Conflicting);
+    update(&mut state, Action::CycleMergeFilter);
+    assert_eq!(state.merge_filter, MergeFilter::Clean);
+    update(&mut state, Action::CycleMergeFilter);
+    assert_eq!(state.merge_filter, MergeFilter::All);
+}
+
+#[test]
+fn test_toggle_help_flips_flag() {
+    let mut state = make_state();
+    assert!(!state.help_open);
+    update(&mut state, Action::ToggleHelp);
+    assert!(state.help_open);
+    update(&mut state, Action::ToggleHelp);
+    assert!(!state.help_open);
+}
+
+#[test]
+fn test_back_closes_help_before_overlay() {
+    let mut state = make_state();
+    state.overlay = Overlay::Diff;
+    update(&mut state, Action::ToggleHelp);
+    assert!(state.help_open);
+
+    // Back closes help first, leaving the PR overlay untouched.
+    update(&mut state, Action::Back);
+    assert!(!state.help_open);
+    assert_eq!(state.overlay, Overlay::Diff);
+}
+
+#[test]
+fn test_merge_filter_selects_and_composes_with_search() {
+    use ghdash::app::state::MergeFilter;
+    let mut state = make_state();
+    let mut clean = make_pr("org-a", "repo1", 1, "clean one");
+    clean.mergeable = Some("MERGEABLE".into());
+    let mut conflict = make_pr("org-a", "repo1", 2, "conflict two");
+    conflict.mergeable = Some("CONFLICTING".into());
+    let mut unknown = make_pr("org-a", "repo1", 3, "unknown three");
+    unknown.mergeable = Some("UNKNOWN".into());
+
+    update(
+        &mut state,
+        Action::DataLoaded(DataPayload::AllOpenPrs {
+            prs: vec![clean, conflict, unknown],
+            rate_limit: RateLimit::default(),
+        }),
+    );
+    state.content_view = ContentView::AllOpenPrs;
+
+    assert_eq!(state.current_pr_list().len(), 3);
+
+    state.merge_filter = MergeFilter::Clean;
+    let clean_list = state.current_pr_list();
+    assert_eq!(clean_list.len(), 1);
+    assert_eq!(clean_list[0].number, 1);
+
+    state.merge_filter = MergeFilter::Conflicting;
+    assert_eq!(state.current_pr_list().len(), 1);
+    assert_eq!(state.current_pr_list()[0].number, 2);
+
+    // Composes with search: Clean + a query excluding the clean PR -> empty.
+    state.merge_filter = MergeFilter::Clean;
+    state.search_query = "conflict".into();
+    assert_eq!(state.current_pr_list().len(), 0);
+}
