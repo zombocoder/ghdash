@@ -470,3 +470,108 @@ fn test_archived_repos_excluded_from_nav() {
 
     assert_eq!(repo_names, vec!["active-repo"]);
 }
+
+// --- PR detail pane (task zkk5) ---
+
+#[test]
+fn test_toggle_detail_flips_flag() {
+    let mut state = make_state();
+    assert!(!state.detail_open);
+    update(&mut state, Action::ToggleDetail);
+    assert!(state.detail_open);
+    update(&mut state, Action::ToggleDetail);
+    assert!(!state.detail_open);
+}
+
+#[test]
+fn test_back_closes_detail_before_switching_pane() {
+    let mut state = make_state();
+    state.focused_pane = FocusedPane::Content;
+    update(&mut state, Action::ToggleDetail);
+    assert!(state.detail_open);
+
+    // Back should close the detail pane first, leaving focus on Content.
+    update(&mut state, Action::Back);
+    assert!(!state.detail_open);
+    assert_eq!(state.focused_pane, FocusedPane::Content);
+}
+
+#[test]
+fn test_pr_detail_loaded_upgrades_list_merge_state() {
+    use ghdash::app::state::PrDetailEntry;
+    use ghdash::github::models::PrDetail;
+
+    let mut state = make_state();
+    // A PR whose list value is UNKNOWN (typical of the search API).
+    let mut pr = make_pr("org-a", "repo1", 7, "Needs fresh state");
+    pr.mergeable = Some("UNKNOWN".into());
+    let url = pr.url.clone();
+    update(
+        &mut state,
+        Action::DataLoaded(DataPayload::AllOpenPrs {
+            prs: vec![pr],
+            rate_limit: RateLimit::default(),
+        }),
+    );
+
+    let detail = PrDetail {
+        mergeable: Some("CONFLICTING".into()),
+        merge_state_status: Some("DIRTY".into()),
+        checks_status: Some("FAILURE".into()),
+        commits: vec![],
+    };
+    update(
+        &mut state,
+        Action::DataLoaded(DataPayload::PrDetailLoaded {
+            key: url.clone(),
+            detail,
+            rate_limit: RateLimit::default(),
+        }),
+    );
+
+    // Detail is cached and the list column reflects the fresh value.
+    assert!(matches!(
+        state.pr_details.get(&url),
+        Some(PrDetailEntry::Loaded(_))
+    ));
+    assert_eq!(
+        state.all_open_prs[0].mergeable.as_deref(),
+        Some("CONFLICTING")
+    );
+    assert_eq!(
+        state.all_open_prs[0].merge_state_status.as_deref(),
+        Some("DIRTY")
+    );
+}
+
+#[test]
+fn test_refresh_clears_pr_details() {
+    use ghdash::app::state::PrDetailEntry;
+
+    let mut state = make_state();
+    state
+        .pr_details
+        .insert("some-url".into(), PrDetailEntry::Loading);
+    assert!(!state.pr_details.is_empty());
+
+    update(&mut state, Action::Refresh);
+    assert!(state.pr_details.is_empty());
+}
+
+#[test]
+fn test_pr_detail_failed_records_error() {
+    use ghdash::app::state::PrDetailEntry;
+
+    let mut state = make_state();
+    update(
+        &mut state,
+        Action::DataLoaded(DataPayload::PrDetailFailed {
+            key: "url-x".into(),
+            msg: "boom".into(),
+        }),
+    );
+    assert!(matches!(
+        state.pr_details.get("url-x"),
+        Some(PrDetailEntry::Failed(_))
+    ));
+}

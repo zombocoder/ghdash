@@ -5,8 +5,8 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table},
 };
 
-use crate::app::state::{AppState, ContentView, FocusedPane, NavNode};
-use crate::github::models::PullRequest;
+use crate::app::state::{AppState, ContentView, FocusedPane, NavNode, PrDetailEntry};
+use crate::github::models::{PrDetail, PullRequest};
 use crate::ui::theme;
 use crate::util::time::relative_time;
 
@@ -309,7 +309,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     let key_hints = if state.search_active {
         "Esc: close search | Enter: filter"
     } else {
-        "j/k: nav | Tab: switch pane | Enter: select | /: search | r: refresh | o: open | q: quit"
+        "j/k: nav | Tab: switch pane | Enter: select | d: detail | /: search | r: refresh | o: open | q: quit"
     };
 
     let status = if state.loading {
@@ -417,5 +417,116 @@ pub fn render_error_modal(f: &mut Frame, area: Rect, state: &AppState) {
     ];
 
     let para = Paragraph::new(text).block(block);
+    f.render_widget(para, modal_area);
+}
+
+/// Human label + style for a PR's `mergeable` value, used in the detail pane.
+fn mergeable_label(mergeable: Option<&str>) -> (String, ratatui::style::Style) {
+    match mergeable {
+        Some("MERGEABLE") => ("✓ mergeable".to_string(), theme::MERGE_CLEAN),
+        Some("CONFLICTING") => ("✗ conflicting".to_string(), theme::MERGE_CONFLICT),
+        _ => ("? unknown".to_string(), theme::DIM),
+    }
+}
+
+/// Human label + style for a `statusCheckRollup.state` value.
+fn checks_label(checks: Option<&str>) -> (String, ratatui::style::Style) {
+    match checks {
+        Some("SUCCESS") => ("✓ passing".to_string(), theme::MERGE_CLEAN),
+        Some("FAILURE") | Some("ERROR") => ("✗ failing".to_string(), theme::MERGE_CONFLICT),
+        Some("PENDING") | Some("EXPECTED") => ("… pending".to_string(), theme::WARNING),
+        Some(other) => (other.to_string(), theme::DIM),
+        None => ("— no checks".to_string(), theme::DIM),
+    }
+}
+
+fn detail_body_lines(detail: &PrDetail, max_commits: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    let (merge_text, merge_style) = mergeable_label(detail.mergeable.as_deref());
+    let (checks_text, checks_style) = checks_label(detail.checks_status.as_deref());
+    let state_suffix = detail
+        .merge_state_status
+        .as_deref()
+        .map(|s| format!(" ({})", s))
+        .unwrap_or_default();
+
+    lines.push(Line::from(vec![
+        Span::styled("Merge: ", theme::HEADER),
+        Span::styled(format!("{}{}", merge_text, state_suffix), merge_style),
+        Span::raw("    "),
+        Span::styled("CI: ", theme::HEADER),
+        Span::styled(checks_text, checks_style),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Recent commits:", theme::HEADER)));
+
+    if detail.commits.is_empty() {
+        lines.push(Line::from(Span::styled("  (none)", theme::DIM)));
+    } else {
+        // GitHub returns oldest-first; show newest first.
+        for commit in detail.commits.iter().rev().take(max_commits) {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {} ", commit.short_oid()), theme::PR_NUMBER),
+                Span::raw(commit.headline.clone()),
+                Span::styled(
+                    format!("  ({})", relative_time(&commit.committed_date)),
+                    theme::DIM,
+                ),
+            ]));
+        }
+    }
+
+    lines
+}
+
+/// Detail-on-highlight overlay: fresh merge state, CI rollup, and recent commits
+/// for the currently highlighted PR.
+pub fn render_pr_detail_overlay(f: &mut Frame, state: &AppState) {
+    if !state.detail_open {
+        return;
+    }
+    let Some(pr) = state.selected_pr() else {
+        return;
+    };
+
+    let area = f.area();
+    let modal_width = (area.width * 3 / 4).clamp(40, area.width.saturating_sub(4));
+    let modal_height = 14u16.min(area.height.saturating_sub(2));
+    let x = (area.width.saturating_sub(modal_width)) / 2;
+    let y = (area.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect {
+        x,
+        y,
+        width: modal_width,
+        height: modal_height,
+    };
+
+    let title = format!(" PR #{} — {} ", pr.number, pr.title);
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(theme::BORDER_FOCUSED);
+
+    let body_capacity = modal_area.height.saturating_sub(4) as usize;
+    let mut lines: Vec<Line> = match state.pr_details.get(&pr.url) {
+        Some(PrDetailEntry::Loaded(detail)) => {
+            detail_body_lines(detail, body_capacity.saturating_sub(3))
+        }
+        Some(PrDetailEntry::Failed(msg)) => {
+            vec![Line::from(Span::styled(msg.clone(), theme::ERROR))]
+        }
+        Some(PrDetailEntry::Loading) | None => {
+            vec![Line::from(Span::styled("Loading detail…", theme::DIM))]
+        }
+    };
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Press d or Esc to close",
+        theme::DIM,
+    )));
+
+    f.render_widget(Clear, modal_area);
+    let para = Paragraph::new(lines).block(block);
     f.render_widget(para, modal_area);
 }
