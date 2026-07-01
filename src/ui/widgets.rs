@@ -262,7 +262,7 @@ fn render_org_overview(
             .iter()
             .filter(|r| !r.is_archived && r.open_pr_count > 0)
             .collect();
-        repos_with_prs.sort_by(|a, b| b.open_pr_count.cmp(&a.open_pr_count));
+        repos_with_prs.sort_by_key(|r| std::cmp::Reverse(r.open_pr_count));
 
         if !repos_with_prs.is_empty() {
             lines.push(Line::from(Span::styled(
