@@ -96,7 +96,9 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
             vec![]
         }
         Action::Back => {
-            if state.search_active {
+            if state.help_open {
+                state.help_open = false;
+            } else if state.search_active {
                 state.search_active = false;
                 state.search_query.clear();
             } else if state.error_message.is_some() {
@@ -165,6 +167,16 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
         }
         Action::CloseOverlay => {
             state.overlay = Overlay::None;
+            vec![]
+        }
+        Action::ToggleHelp => {
+            state.help_open = !state.help_open;
+            vec![]
+        }
+        Action::CycleMergeFilter => {
+            state.merge_filter = state.merge_filter.next();
+            // Row set changed; reset the cursor so it stays in range.
+            state.content_cursor = 0;
             vec![]
         }
         Action::SearchInput(ch) => {

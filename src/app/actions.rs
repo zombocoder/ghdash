@@ -14,6 +14,8 @@ pub enum Action {
     ToggleGitLog,
     ToggleDiff,
     CloseOverlay,
+    ToggleHelp,
+    CycleMergeFilter,
     SearchInput(char),
     SearchBackspace,
     SearchClear,

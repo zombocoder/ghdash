@@ -291,6 +291,8 @@ fn map_event_to_action(event: &Event, state: &AppState) -> Option<Action> {
         KeyCode::BackTab => Some(Action::SwitchPane),
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('o') => Some(Action::OpenInBrowser),
+        KeyCode::Char('f') => Some(Action::CycleMergeFilter),
+        KeyCode::Char('?') => Some(Action::ToggleHelp),
         KeyCode::Char('/') => Some(Action::ToggleSearch),
         _ => None,
     }
