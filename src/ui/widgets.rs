@@ -5,7 +5,9 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table},
 };
 
-use crate::app::state::{AppState, ContentView, FocusedPane, NavNode, PrDetailEntry};
+use crate::app::state::{
+    AppState, ContentView, DiffEntry, FocusedPane, NavNode, Overlay, PrDetailEntry,
+};
 use crate::github::models::{CiStatus, PrDetail, PullRequest};
 use crate::ui::theme;
 use crate::util::time::relative_time;
@@ -328,7 +330,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     let key_hints = if state.search_active {
         "Esc: close search | Enter: filter"
     } else {
-        "j/k: nav | Tab: switch pane | Enter: select | d: detail | /: search | r: refresh | o: open | q: quit"
+        "j/k: nav | Tab: pane | Enter: select | l: log | d: diff | /: search | r: refresh | o: open | q: quit"
     };
 
     let status = if state.loading {
@@ -499,29 +501,36 @@ fn detail_body_lines(detail: &PrDetail, max_commits: usize) -> Vec<Line<'static>
     lines
 }
 
-/// Detail-on-highlight overlay: fresh merge state, CI rollup, and recent commits
-/// for the currently highlighted PR.
-pub fn render_pr_detail_overlay(f: &mut Frame, state: &AppState) {
-    if !state.detail_open {
-        return;
+/// Render the active PR overlay (git log or diff) for the highlighted PR, if any.
+pub fn render_pr_overlay(f: &mut Frame, state: &AppState) {
+    match state.overlay {
+        Overlay::None => {}
+        Overlay::GitLog => render_git_log_overlay(f, state),
+        Overlay::Diff => render_diff_overlay(f, state),
     }
+}
+
+/// Centered modal rect covering the given fraction of the screen.
+fn overlay_area(f: &Frame, width_pct: u16, height_pct: u16) -> Rect {
+    let area = f.area();
+    let modal_width = (area.width * width_pct / 100).clamp(40, area.width.saturating_sub(2));
+    let modal_height = (area.height * height_pct / 100).clamp(6, area.height.saturating_sub(2));
+    Rect {
+        x: (area.width.saturating_sub(modal_width)) / 2,
+        y: (area.height.saturating_sub(modal_height)) / 2,
+        width: modal_width,
+        height: modal_height,
+    }
+}
+
+/// Git-log overlay: recent commits (plus fresh merge/CI) for the highlighted PR.
+fn render_git_log_overlay(f: &mut Frame, state: &AppState) {
     let Some(pr) = state.selected_pr() else {
         return;
     };
 
-    let area = f.area();
-    let modal_width = (area.width * 3 / 4).clamp(40, area.width.saturating_sub(4));
-    let modal_height = 14u16.min(area.height.saturating_sub(2));
-    let x = (area.width.saturating_sub(modal_width)) / 2;
-    let y = (area.height.saturating_sub(modal_height)) / 2;
-    let modal_area = Rect {
-        x,
-        y,
-        width: modal_width,
-        height: modal_height,
-    };
-
-    let title = format!(" PR #{} — {} ", pr.number, pr.title);
+    let modal_area = overlay_area(f, 75, 60);
+    let title = format!(" Git log — PR #{} — {} ", pr.number, pr.title);
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
@@ -536,16 +545,93 @@ pub fn render_pr_detail_overlay(f: &mut Frame, state: &AppState) {
             vec![Line::from(Span::styled(msg.clone(), theme::ERROR))]
         }
         Some(PrDetailEntry::Loading) | None => {
-            vec![Line::from(Span::styled("Loading detail…", theme::DIM))]
+            vec![Line::from(Span::styled("Loading commits…", theme::DIM))]
         }
     };
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Press d or Esc to close",
+        "l/Esc: close · d: diff",
         theme::DIM,
     )));
 
     f.render_widget(Clear, modal_area);
     let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, modal_area);
+}
+
+/// Style a single unified-diff line by its leading marker.
+fn diff_line_style(line: &str) -> ratatui::style::Style {
+    use ratatui::style::{Color, Style};
+    if line.starts_with("diff --git") || line.starts_with("index ") {
+        theme::NAV_ORG
+    } else if line.starts_with("@@") {
+        theme::PR_NUMBER
+    } else if line.starts_with("+++") || line.starts_with("---") {
+        theme::HEADER
+    } else if line.starts_with('+') {
+        Style::new().fg(Color::Green)
+    } else if line.starts_with('-') {
+        Style::new().fg(Color::Red)
+    } else {
+        Style::default()
+    }
+}
+
+/// Diff overlay: full unified diff for the highlighted PR, scrollable with j/k.
+fn render_diff_overlay(f: &mut Frame, state: &AppState) {
+    let Some(pr) = state.selected_pr() else {
+        return;
+    };
+
+    let modal_area = overlay_area(f, 90, 90);
+    let title = format!(" Diff — PR #{} — {} ", pr.number, pr.title);
+
+    let body_height = modal_area.height.saturating_sub(3) as usize;
+
+    let (lines, scrollable): (Vec<Line>, bool) = match state.pr_diffs.get(&pr.url) {
+        Some(DiffEntry::Loaded(diff)) if !diff.is_empty() => (
+            diff.lines()
+                .map(|l| Line::from(Span::styled(l.to_string(), diff_line_style(l))))
+                .collect(),
+            true,
+        ),
+        Some(DiffEntry::Loaded(_)) => (
+            vec![Line::from(Span::styled("(empty diff)", theme::DIM))],
+            false,
+        ),
+        Some(DiffEntry::Failed(msg)) => (
+            vec![Line::from(Span::styled(msg.clone(), theme::ERROR))],
+            false,
+        ),
+        Some(DiffEntry::Loading) | None => (
+            vec![Line::from(Span::styled("Loading diff…", theme::DIM))],
+            false,
+        ),
+    };
+
+    // Clamp scroll so we can't page past the end.
+    let max_scroll = lines.len().saturating_sub(body_height) as u16;
+    let scroll = if scrollable {
+        state.diff_scroll.min(max_scroll)
+    } else {
+        0
+    };
+
+    let hint = if scrollable {
+        format!(
+            " j/k: scroll · d/Esc: close · l: log ({}/{}) ",
+            scroll, max_scroll
+        )
+    } else {
+        " d/Esc: close · l: log ".to_string()
+    };
+    let block = Block::default()
+        .title(title)
+        .title_bottom(Line::from(Span::styled(hint, theme::DIM)))
+        .borders(Borders::ALL)
+        .border_style(theme::BORDER_FOCUSED);
+
+    f.render_widget(Clear, modal_area);
+    let para = Paragraph::new(lines).block(block).scroll((scroll, 0));
     f.render_widget(para, modal_area);
 }
