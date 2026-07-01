@@ -307,6 +307,8 @@ fn parse_search_pr(node: &Value) -> PullRequest {
         additions: node["additions"].as_u64().unwrap_or(0) as u32,
         deletions: node["deletions"].as_u64().unwrap_or(0) as u32,
         review_decision: node["reviewDecision"].as_str().map(|s| s.to_string()),
+        mergeable: node["mergeable"].as_str().map(|s| s.to_string()),
+        merge_state_status: node["mergeStateStatus"].as_str().map(|s| s.to_string()),
         labels,
     }
 }

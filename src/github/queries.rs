@@ -87,6 +87,8 @@ query($owner: String!, $name: String!, $cursor: String) {
         additions
         deletions
         reviewDecision
+        mergeable
+        mergeStateStatus
         labels(first: 10) {
           nodes { name }
         }
@@ -124,6 +126,8 @@ query($query: String!, $cursor: String) {
         additions
         deletions
         reviewDecision
+        mergeable
+        mergeStateStatus
         labels(first: 10) {
           nodes { name }
         }

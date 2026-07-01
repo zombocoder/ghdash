@@ -34,3 +34,9 @@ pub const NAV_VIRTUAL: Style = Style::new().fg(Color::Magenta).add_modifier(Modi
 pub const PR_NUMBER: Style = Style::new().fg(Color::Cyan);
 
 pub const PR_AUTHOR: Style = Style::new().fg(Color::Yellow);
+
+// Merge-state column. Color is paired with a distinct glyph in the widget so the
+// signal survives colorblindness and monochrome terminals.
+pub const MERGE_CLEAN: Style = Style::new().fg(Color::Green);
+
+pub const MERGE_CONFLICT: Style = Style::new().fg(Color::Red).add_modifier(Modifier::BOLD);
