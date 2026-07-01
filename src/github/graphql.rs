@@ -372,6 +372,11 @@ fn parse_search_pr(node: &Value) -> PullRequest {
         review_decision: node["reviewDecision"].as_str().map(|s| s.to_string()),
         mergeable: node["mergeable"].as_str().map(|s| s.to_string()),
         merge_state_status: node["mergeStateStatus"].as_str().map(|s| s.to_string()),
+        checks_status: node["commits"]["nodes"]
+            .as_array()
+            .and_then(|arr| arr.last())
+            .and_then(|n| n["commit"]["statusCheckRollup"]["state"].as_str())
+            .map(|s| s.to_string()),
         labels,
     }
 }

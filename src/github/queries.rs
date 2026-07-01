@@ -89,6 +89,13 @@ query($owner: String!, $name: String!, $cursor: String) {
         reviewDecision
         mergeable
         mergeStateStatus
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup { state }
+            }
+          }
+        }
         labels(first: 10) {
           nodes { name }
         }
@@ -128,6 +135,13 @@ query($query: String!, $cursor: String) {
         reviewDecision
         mergeable
         mergeStateStatus
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup { state }
+            }
+          }
+        }
         labels(first: 10) {
           nodes { name }
         }

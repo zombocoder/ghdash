@@ -1,4 +1,4 @@
-use ghdash::github::models::{PullRequest, Repo};
+use ghdash::github::models::{CiStatus, PullRequest, Repo};
 
 #[test]
 fn test_repo_full_name() {
@@ -30,6 +30,7 @@ fn test_pr_repo_full_name() {
         review_decision: None,
         mergeable: None,
         merge_state_status: None,
+        checks_status: None,
         labels: vec![],
     };
     assert_eq!(pr.repo_full_name(), "org/repo");
@@ -73,6 +74,7 @@ fn test_pr_serialization_roundtrip() {
         review_decision: Some("APPROVED".into()),
         mergeable: Some("MERGEABLE".into()),
         merge_state_status: Some("CLEAN".into()),
+        checks_status: Some("SUCCESS".into()),
         labels: vec!["bug".into(), "urgent".into()],
     };
 
@@ -86,6 +88,7 @@ fn test_pr_serialization_roundtrip() {
     assert_eq!(deserialized.review_decision, Some("APPROVED".into()));
     assert_eq!(deserialized.mergeable, Some("MERGEABLE".into()));
     assert_eq!(deserialized.merge_state_status, Some("CLEAN".into()));
+    assert_eq!(deserialized.checks_status, Some("SUCCESS".into()));
     assert_eq!(deserialized.labels, vec!["bug", "urgent"]);
 }
 
@@ -129,6 +132,7 @@ fn test_pr_with_no_review_decision() {
         review_decision: None,
         mergeable: None,
         merge_state_status: None,
+        checks_status: None,
         labels: vec![],
     };
 
@@ -161,6 +165,7 @@ fn test_pr_deserializes_without_merge_fields() {
     assert_eq!(pr.number, 7);
     assert!(pr.mergeable.is_none());
     assert!(pr.merge_state_status.is_none());
+    assert!(pr.checks_status.is_none());
 }
 
 #[test]
@@ -180,6 +185,7 @@ fn test_pr_conflicting_merge_state_roundtrip() {
         review_decision: None,
         mergeable: Some("CONFLICTING".into()),
         merge_state_status: Some("DIRTY".into()),
+        checks_status: Some("FAILURE".into()),
         labels: vec![],
     };
 
@@ -187,4 +193,64 @@ fn test_pr_conflicting_merge_state_roundtrip() {
     let deserialized: PullRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.mergeable, Some("CONFLICTING".into()));
     assert_eq!(deserialized.merge_state_status, Some("DIRTY".into()));
+    assert_eq!(deserialized.checks_status, Some("FAILURE".into()));
+}
+
+// --- CI status classification (task 9h3o) ---
+
+fn pr_with_checks(state: Option<&str>) -> PullRequest {
+    PullRequest {
+        number: 1,
+        title: "t".into(),
+        author: "a".into(),
+        repo_owner: "o".into(),
+        repo_name: "r".into(),
+        url: "u".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        is_draft: false,
+        additions: 0,
+        deletions: 0,
+        review_decision: None,
+        mergeable: None,
+        merge_state_status: None,
+        checks_status: state.map(|s| s.to_string()),
+        labels: vec![],
+    }
+}
+
+#[test]
+fn test_ci_status_success() {
+    assert_eq!(
+        pr_with_checks(Some("SUCCESS")).ci_status(),
+        CiStatus::Passing
+    );
+}
+
+#[test]
+fn test_ci_status_failure() {
+    assert_eq!(
+        pr_with_checks(Some("FAILURE")).ci_status(),
+        CiStatus::Failing
+    );
+    assert_eq!(pr_with_checks(Some("ERROR")).ci_status(), CiStatus::Failing);
+}
+
+#[test]
+fn test_ci_status_pending() {
+    assert_eq!(
+        pr_with_checks(Some("PENDING")).ci_status(),
+        CiStatus::Pending
+    );
+    assert_eq!(
+        pr_with_checks(Some("EXPECTED")).ci_status(),
+        CiStatus::Pending
+    );
+}
+
+#[test]
+fn test_ci_status_none() {
+    assert_eq!(pr_with_checks(None).ci_status(), CiStatus::None);
+    // Unknown/other states fall back to None rather than misreporting.
+    assert_eq!(pr_with_checks(Some("WEIRD")).ci_status(), CiStatus::None);
 }

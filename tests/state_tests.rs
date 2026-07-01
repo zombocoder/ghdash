@@ -37,6 +37,7 @@ fn make_pr(repo_owner: &str, repo_name: &str, number: u32, title: &str) -> PullR
         review_decision: None,
         mergeable: None,
         merge_state_status: None,
+        checks_status: None,
         labels: vec![],
     }
 }

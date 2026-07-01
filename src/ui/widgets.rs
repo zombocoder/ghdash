@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use crate::app::state::{AppState, ContentView, FocusedPane, NavNode, PrDetailEntry};
-use crate::github::models::{PrDetail, PullRequest};
+use crate::github::models::{CiStatus, PrDetail, PullRequest};
 use crate::ui::theme;
 use crate::util::time::relative_time;
 
@@ -126,6 +126,17 @@ fn merge_state_display(pr: &PullRequest) -> (&'static str, ratatui::style::Style
     }
 }
 
+/// Single-glyph CI check indicator for the list column. `statusCheckRollup` is not
+/// lazily computed, so this is reliable straight from the search API.
+fn ci_display(pr: &PullRequest) -> (&'static str, ratatui::style::Style) {
+    match pr.ci_status() {
+        CiStatus::Passing => ("✓", theme::MERGE_CLEAN),
+        CiStatus::Failing => ("✗", theme::MERGE_CONFLICT),
+        CiStatus::Pending => ("…", theme::WARNING),
+        CiStatus::None => ("·", theme::DIM),
+    }
+}
+
 fn render_pr_table(
     f: &mut Frame,
     area: Rect,
@@ -164,6 +175,7 @@ fn render_pr_table(
     let header = Row::new(vec![
         Cell::from("#").style(theme::HEADER),
         Cell::from("State").style(theme::HEADER),
+        Cell::from("CI").style(theme::HEADER),
         Cell::from("Title").style(theme::HEADER),
         Cell::from("Author").style(theme::HEADER),
         Cell::from("Repo").style(theme::HEADER),
@@ -190,6 +202,7 @@ fn render_pr_table(
             };
 
             let (merge_label, merge_style) = merge_state_display(pr);
+            let (ci_label, ci_style) = ci_display(pr);
 
             Row::new(vec![
                 Cell::from(format!("#{}", pr.number)).style(if style == theme::HIGHLIGHT {
@@ -201,6 +214,11 @@ fn render_pr_table(
                     style
                 } else {
                     merge_style
+                }),
+                Cell::from(ci_label).style(if style == theme::HIGHLIGHT {
+                    style
+                } else {
+                    ci_style
                 }),
                 Cell::from(format!(
                     "{}{}{}",
@@ -228,6 +246,7 @@ fn render_pr_table(
     let widths = [
         Constraint::Length(7),
         Constraint::Length(5),
+        Constraint::Length(3),
         Constraint::Min(20),
         Constraint::Length(16),
         Constraint::Length(24),

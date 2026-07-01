@@ -48,11 +48,36 @@ pub struct PullRequest {
     /// same lazy-compute caveat.
     #[serde(default)]
     pub merge_state_status: Option<String>,
+    /// `statusCheckRollup.state` of the PR's latest commit: `SUCCESS` / `FAILURE` /
+    /// `PENDING` / `ERROR` / `EXPECTED`. Unlike `mergeable`, this is not computed
+    /// lazily, so the search API returns real values. `None` = no checks / absent.
+    #[serde(default)]
+    pub checks_status: Option<String>,
+}
+
+/// Coarse CI outcome derived from `checks_status`, decoupled from the raw GitHub
+/// enum so the UI (and tests) don't hard-code string matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiStatus {
+    Passing,
+    Failing,
+    Pending,
+    None,
 }
 
 impl PullRequest {
     pub fn repo_full_name(&self) -> String {
         format!("{}/{}", self.repo_owner, self.repo_name)
+    }
+
+    /// Classify the CI check rollup into a coarse outcome for display.
+    pub fn ci_status(&self) -> CiStatus {
+        match self.checks_status.as_deref() {
+            Some("SUCCESS") => CiStatus::Passing,
+            Some("FAILURE") | Some("ERROR") => CiStatus::Failing,
+            Some("PENDING") | Some("EXPECTED") => CiStatus::Pending,
+            _ => CiStatus::None,
+        }
     }
 }
 
