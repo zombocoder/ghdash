@@ -88,7 +88,6 @@ query($owner: String!, $name: String!, $cursor: String) {
         deletions
         reviewDecision
         mergeable
-        mergeStateStatus
         commits(last: 1) {
           nodes {
             commit {
@@ -112,7 +111,7 @@ query($owner: String!, $name: String!, $cursor: String) {
 
 pub const SEARCH_PRS_QUERY: &str = r#"
 query($query: String!, $cursor: String) {
-  search(query: $query, type: ISSUE, first: 100, after: $cursor) {
+  search(query: $query, type: ISSUE, first: 50, after: $cursor) {
     pageInfo {
       hasNextPage
       endCursor
@@ -134,7 +133,6 @@ query($query: String!, $cursor: String) {
         deletions
         reviewDecision
         mergeable
-        mergeStateStatus
         commits(last: 1) {
           nodes {
             commit {
