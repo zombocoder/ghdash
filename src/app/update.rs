@@ -179,6 +179,68 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
             state.content_cursor = 0;
             vec![]
         }
+        Action::ToggleProfilePicker => {
+            if state.profile_picker_active {
+                state.profile_picker_active = false;
+                state.profile_picker_query.clear();
+            } else {
+                state.profile_picker_active = true;
+                state.profile_picker_query.clear();
+                // Start the cursor on the currently active profile.
+                state.profile_picker_cursor = state
+                    .profiles
+                    .iter()
+                    .position(|p| p.name == state.active_profile)
+                    .unwrap_or(0);
+            }
+            vec![]
+        }
+        Action::ProfilePickerInput(ch) => {
+            if state.profile_picker_active {
+                state.profile_picker_query.push(ch);
+                state.profile_picker_cursor = 0;
+            }
+            vec![]
+        }
+        Action::ProfilePickerBackspace => {
+            if state.profile_picker_active {
+                state.profile_picker_query.pop();
+                state.profile_picker_cursor = 0;
+            }
+            vec![]
+        }
+        Action::ProfilePickerUp => {
+            if state.profile_picker_cursor > 0 {
+                state.profile_picker_cursor -= 1;
+            }
+            vec![]
+        }
+        Action::ProfilePickerDown => {
+            let len = state.filtered_profiles().len();
+            if len > 0 && state.profile_picker_cursor + 1 < len {
+                state.profile_picker_cursor += 1;
+            }
+            vec![]
+        }
+        Action::ProfilePickerConfirm => {
+            let target = state
+                .filtered_profiles()
+                .get(state.profile_picker_cursor)
+                .map(|p| p.name.clone());
+            state.profile_picker_active = false;
+            state.profile_picker_query.clear();
+            if let Some(name) = target
+                && name != state.active_profile
+            {
+                state.pending_profile_switch = Some(name);
+            }
+            vec![]
+        }
+        Action::ProfilePickerCancel => {
+            state.profile_picker_active = false;
+            state.profile_picker_query.clear();
+            vec![]
+        }
         Action::SearchInput(ch) => {
             if state.search_active {
                 state.search_query.push(ch);

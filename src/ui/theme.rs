@@ -25,6 +25,12 @@ pub const BORDER_UNFOCUSED: Style = Style::new().fg(Color::DarkGray);
 
 pub const STATUS_BAR: Style = Style::new().fg(Color::White).bg(Color::DarkGray);
 
+// Active-profile chip in the status bar: stands out against the status bar bg.
+pub const STATUS_CHIP: Style = Style::new()
+    .fg(Color::Green)
+    .bg(Color::DarkGray)
+    .add_modifier(Modifier::BOLD);
+
 pub const NAV_ORG: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
 
 pub const NAV_REPO: Style = Style::new().fg(Color::White);

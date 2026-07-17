@@ -1,7 +1,8 @@
 use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
@@ -13,18 +14,76 @@ use tokio::sync::{Semaphore, mpsc};
 use tracing::{debug, error};
 
 use crate::app::actions::{Action, DataPayload, SideEffect};
-use crate::app::state::{AppState, DiffEntry, FocusedPane, Overlay, PrDetailEntry};
+use crate::app::state::{AppState, DiffEntry, FocusedPane, Overlay, PrDetailEntry, ProfileSummary};
 use crate::app::update::update;
 use crate::app::view;
 use crate::cache::CacheStore;
 use crate::github::GithubClient;
-use crate::util::config::AppConfig;
+use crate::util::config::{AppConfig, Profile};
+
+/// Everything needed to run against one profile: its effective config, an
+/// authenticated client, the resolved viewer login, and its cache namespace.
+pub struct ProfileRuntime {
+    pub config: AppConfig,
+    pub client: GithubClient,
+    pub viewer_login: String,
+    pub cache_store: Option<CacheStore>,
+}
+
+/// Build the runtime for a profile: resolve its token (never persisted), build a
+/// client for its `api_url`, authenticate, and open its cache namespace. Used at
+/// startup and on every profile switch.
+pub async fn build_runtime(
+    profile: &Profile,
+    base_cache_dir: &Path,
+    no_cache: bool,
+    invalidate: bool,
+) -> Result<ProfileRuntime> {
+    let token = crate::github::auth::resolve_profile_token(
+        profile.github.token_env.as_deref(),
+        &profile.github.api_url,
+    )?;
+    let client = GithubClient::new(&token, &profile.github.api_url)?;
+    let viewer_login = client
+        .fetch_viewer()
+        .await
+        .context("failed to authenticate with GitHub")?;
+
+    let cache_store = if no_cache {
+        None
+    } else {
+        let store = CacheStore::new(profile.cache_dir(base_cache_dir), profile.cache.ttl_secs);
+        if invalidate {
+            store.invalidate_all()?;
+        }
+        Some(store)
+    };
+
+    Ok(ProfileRuntime {
+        config: profile.to_app_config(),
+        client,
+        viewer_login,
+        cache_store,
+    })
+}
+
+fn profile_summaries(profiles: &[Profile]) -> Vec<ProfileSummary> {
+    profiles
+        .iter()
+        .map(|p| ProfileSummary {
+            name: p.name.clone(),
+            scope_count: p.scope_count(),
+            host: p.host(),
+        })
+        .collect()
+}
 
 pub async fn run(
-    config: AppConfig,
-    client: GithubClient,
-    viewer_login: String,
-    cache_store: Option<CacheStore>,
+    profiles: Vec<Profile>,
+    active_name: String,
+    base_cache_dir: PathBuf,
+    no_cache: bool,
+    initial: ProfileRuntime,
 ) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
@@ -41,7 +100,15 @@ pub async fn run(
         original_hook(panic_info);
     }));
 
-    let result = run_loop(&mut terminal, config, client, viewer_login, cache_store).await;
+    let result = run_loop(
+        &mut terminal,
+        profiles,
+        active_name,
+        base_cache_dir,
+        no_cache,
+        initial,
+    )
+    .await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -52,11 +119,19 @@ pub async fn run(
 
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    config: AppConfig,
-    client: GithubClient,
-    viewer_login: String,
-    cache_store: Option<CacheStore>,
+    profiles: Vec<Profile>,
+    active_name: String,
+    base_cache_dir: PathBuf,
+    no_cache: bool,
+    initial: ProfileRuntime,
 ) -> Result<()> {
+    let ProfileRuntime {
+        mut config,
+        mut client,
+        mut viewer_login,
+        mut cache_store,
+    } = initial;
+
     let all_owners: Vec<String> = config
         .github
         .orgs
@@ -65,6 +140,7 @@ async fn run_loop(
         .cloned()
         .collect();
     let mut state = AppState::new(viewer_login.clone(), all_owners);
+    state.set_profiles(profile_summaries(&profiles), active_name);
 
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<Action>();
     let semaphore = Arc::new(Semaphore::new(4));
@@ -220,6 +296,57 @@ async fn run_loop(
                 }
             }
         }
+
+        // Profile switch requested from the picker: rebuild the client for the
+        // target profile (new token + api_url + cache namespace), reset the data
+        // state, and kick off a fresh fetch. The old client + token are dropped.
+        if let Some(target) = state.pending_profile_switch.take()
+            && let Some(profile) = profiles.iter().find(|p| p.name == target)
+        {
+            state.loading = true;
+            match build_runtime(profile, &base_cache_dir, no_cache, false).await {
+                Ok(rt) => {
+                    config = rt.config;
+                    client = rt.client;
+                    viewer_login = rt.viewer_login;
+                    cache_store = rt.cache_store;
+
+                    let owners: Vec<String> = config
+                        .github
+                        .orgs
+                        .iter()
+                        .chain(config.github.users.iter())
+                        .cloned()
+                        .collect();
+                    let summaries = state.profiles.clone();
+                    state = AppState::new(viewer_login.clone(), owners);
+                    state.set_profiles(summaries, target.clone());
+
+                    // Old dataset is gone; disarm the overlay debounce.
+                    armed_key = None;
+                    pending_fetch = None;
+
+                    spawn_side_effect(
+                        SideEffect::RefreshAll,
+                        &config,
+                        &client,
+                        &viewer_login,
+                        &cache_store,
+                        &action_tx,
+                        &semaphore,
+                    );
+                }
+                Err(e) => {
+                    // Never surface token material; report a generic failure.
+                    debug!(profile = %target, error = %e, "Profile switch failed");
+                    state.loading = false;
+                    state.error_message = Some(format!(
+                        "Failed to switch to profile '{}'. Check its token/host and retry.",
+                        target
+                    ));
+                }
+            }
+        }
     }
 
     Ok(())
@@ -240,6 +367,21 @@ fn map_event_to_action(event: &Event, state: &AppState) -> Option<Action> {
     if state.error_message.is_some() {
         return match code {
             KeyCode::Esc => Some(Action::DismissError),
+            _ => None,
+        };
+    }
+
+    // Handle the profile picker (type-to-filter modal): arrows navigate, all
+    // other printable keys filter, Enter switches, Esc cancels.
+    if state.profile_picker_active {
+        return match code {
+            KeyCode::Esc => Some(Action::ProfilePickerCancel),
+            KeyCode::Enter => Some(Action::ProfilePickerConfirm),
+            KeyCode::Up => Some(Action::ProfilePickerUp),
+            KeyCode::Down => Some(Action::ProfilePickerDown),
+            KeyCode::Backspace => Some(Action::ProfilePickerBackspace),
+            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
+            KeyCode::Char(c) => Some(Action::ProfilePickerInput(*c)),
             _ => None,
         };
     }
@@ -292,6 +434,7 @@ fn map_event_to_action(event: &Event, state: &AppState) -> Option<Action> {
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('o') => Some(Action::OpenInBrowser),
         KeyCode::Char('f') => Some(Action::CycleMergeFilter),
+        KeyCode::Char('p') => Some(Action::ToggleProfilePicker),
         KeyCode::Char('?') => Some(Action::ToggleHelp),
         KeyCode::Char('/') => Some(Action::ToggleSearch),
         _ => None,
