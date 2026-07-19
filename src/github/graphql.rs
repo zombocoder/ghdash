@@ -313,11 +313,36 @@ impl GithubClient {
     /// REST v3 base URL, derived from the configured GraphQL `api_url`.
     /// `https://api.github.com/graphql` → `https://api.github.com`;
     /// Enterprise `https://host/api/graphql` → `https://host/api/v3`.
+    ///
+    /// If `api_url` does not end in `/graphql`, the REST base is derived from its **own host**
+    /// rather than silently falling back to `api.github.com` — sending a profile's token to the
+    /// wrong host would be both incorrect and a token-leak risk.
     fn rest_base(&self) -> String {
         match self.api_url.strip_suffix("/graphql") {
             Some(base) if base.ends_with("/api") => format!("{}/v3", base),
             Some(base) => base.to_string(),
-            None => "https://api.github.com".to_string(),
+            None => {
+                let host = self
+                    .api_url
+                    .split_once("://")
+                    .and_then(|(scheme, rest)| rest.split('/').next().map(|h| (scheme, h)));
+                match host {
+                    // Public GitHub: REST base is the bare host.
+                    Some(("https", "api.github.com")) => "https://api.github.com".to_string(),
+                    // Enterprise (or any other host): keep the request ON THAT HOST.
+                    Some((scheme, h)) => {
+                        tracing::warn!(
+                            api_url = %self.api_url,
+                            "api_url does not end in /graphql; deriving Enterprise REST base from its host — set api_url to https://<host>/api/graphql to silence this"
+                        );
+                        format!("{scheme}://{h}/api/v3")
+                    }
+                    None => {
+                        tracing::warn!(api_url = %self.api_url, "unparseable api_url; defaulting REST base to api.github.com");
+                        "https://api.github.com".to_string()
+                    }
+                }
+            }
         }
     }
 
@@ -437,5 +462,54 @@ fn parse_search_pr(node: &Value) -> PullRequest {
             .and_then(|n| n["commit"]["statusCheckRollup"]["state"].as_str())
             .map(|s| s.to_string()),
         labels,
+    }
+}
+
+#[cfg(test)]
+mod rest_base_tests {
+    use super::GithubClient;
+
+    fn rest_base_for(api_url: &str) -> String {
+        GithubClient::new("test-token", api_url)
+            .expect("client")
+            .rest_base()
+    }
+
+    #[test]
+    fn graphql_endpoints_map_to_rest_base() {
+        assert_eq!(
+            rest_base_for("https://api.github.com/graphql"),
+            "https://api.github.com"
+        );
+        assert_eq!(
+            rest_base_for("https://ghe.acme.corp/api/graphql"),
+            "https://ghe.acme.corp/api/v3"
+        );
+    }
+
+    #[test]
+    fn non_graphql_enterprise_url_stays_on_its_own_host() {
+        // The hardening: a non-/graphql Enterprise api_url must NOT fall back to github.com
+        // (which would send the profile's token to the wrong host).
+        for u in [
+            "https://ghe.acme.corp/api/v3",
+            "https://ghe.acme.corp",
+            "https://git.internal.example/api",
+        ] {
+            let base = rest_base_for(u);
+            assert!(
+                !base.contains("api.github.com"),
+                "{u} wrongly fell back to github.com: {base}"
+            );
+            assert!(base.contains("ghe.acme.corp") || base.contains("git.internal.example"));
+        }
+    }
+
+    #[test]
+    fn non_graphql_public_github_url_is_github() {
+        assert_eq!(
+            rest_base_for("https://api.github.com"),
+            "https://api.github.com"
+        );
     }
 }
