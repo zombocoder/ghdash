@@ -40,32 +40,42 @@ async fn main() -> Result<()> {
 
     info!("ghdash starting");
 
-    // Resolve auth token before starting TUI
-    let token = match github::auth::resolve_token() {
-        Ok(t) => t,
+    // Resolve the profile list (single "default" when no [[profiles]] configured)
+    // and pick the active one.
+    let profiles = config.profiles();
+    let active_name = config.active_profile_name();
+    let base_cache_dir = config.cache_dir();
+
+    let active_profile = profiles
+        .iter()
+        .find(|p| p.name == active_name)
+        .cloned()
+        .expect("active profile always present in profile list");
+
+    // Build the runtime for the active profile (resolves token, authenticates,
+    // opens its cache namespace). Exits on auth failure, as before.
+    let runtime = match app::event_loop::build_runtime(
+        &active_profile,
+        &base_cache_dir,
+        cli.no_cache,
+        cli.refresh,
+    )
+    .await
+    {
+        Ok(rt) => rt,
         Err(e) => {
-            eprintln!("Authentication error: {e}");
+            eprintln!("Failed to start profile '{active_name}': {e}");
+            eprintln!("Check the profile's token (token_env / GITHUB_TOKEN / `gh auth login`).");
             std::process::exit(1);
         }
     };
 
-    let client = github::GithubClient::new(&token, &config.github.api_url)?;
+    info!(login = %runtime.viewer_login, profile = %active_name, "Authenticated");
 
-    // Verify auth by fetching viewer
-    let viewer = match client.fetch_viewer().await {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Failed to authenticate with GitHub: {e}");
-            eprintln!("Please check your token and try again.");
-            std::process::exit(1);
-        }
-    };
-
-    info!(login = %viewer, "Authenticated as {}", viewer);
-
-    if config.github.orgs.is_empty() && config.github.users.is_empty() {
+    if runtime.config.github.orgs.is_empty() && runtime.config.github.users.is_empty() {
         eprintln!(
-            "No organizations or users configured. Please add orgs or users to your config file.\n\
+            "No organizations or users configured for profile '{active_name}'. Add orgs or users \
+             to your config file.\n\
              Example config (~/.config/ghdash/config.toml):\n\n\
              [github]\n\
              orgs = [\"my-org\"]\n\
@@ -74,19 +84,8 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    // Build cache store
-    let cache_store = if cli.no_cache {
-        None
-    } else {
-        let store = cache::CacheStore::new(config.cache_dir(), config.cache.ttl_secs);
-        if cli.refresh {
-            store.invalidate_all()?;
-        }
-        Some(store)
-    };
-
     // Run the TUI event loop
-    app::event_loop::run(config, client, viewer, cache_store).await
+    app::event_loop::run(profiles, active_name, base_cache_dir, cli.no_cache, runtime).await
 }
 
 fn setup_logging(

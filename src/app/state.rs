@@ -78,6 +78,15 @@ pub enum ContentView {
     Inbox,
 }
 
+/// Lightweight, display-only summary of a configured profile for the picker.
+/// Deliberately carries no token or secret material.
+#[derive(Debug, Clone)]
+pub struct ProfileSummary {
+    pub name: String,
+    pub scope_count: usize,
+    pub host: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum NavNode {
     Org(String),
@@ -131,6 +140,18 @@ pub struct AppState {
     pub merge_filter: MergeFilter,
     pub help_open: bool,
 
+    // Profile switcher
+    /// All configured profiles (display metadata only, no secrets).
+    pub profiles: Vec<ProfileSummary>,
+    /// Name of the currently active profile (shown in the status-bar chip).
+    pub active_profile: String,
+    pub profile_picker_active: bool,
+    pub profile_picker_query: String,
+    pub profile_picker_cursor: usize,
+    /// Set when the user confirms a switch; drained by the event loop, which
+    /// rebuilds the client and re-fetches for the target profile.
+    pub pending_profile_switch: Option<String>,
+
     // UI flags
     pub loading: bool,
     pub loading_orgs: HashSet<String>,
@@ -175,6 +196,12 @@ impl AppState {
             diff_scroll: 0,
             merge_filter: MergeFilter::All,
             help_open: false,
+            profiles: Vec::new(),
+            active_profile: "default".to_string(),
+            profile_picker_active: false,
+            profile_picker_query: String::new(),
+            profile_picker_cursor: 0,
+            pending_profile_switch: None,
             loading: true,
             loading_orgs: HashSet::new(),
             error_message: None,
@@ -183,6 +210,22 @@ impl AppState {
 
         state.rebuild_nav_tree();
         state
+    }
+
+    /// Install the profile list and the active profile name (called at startup
+    /// and after a successful switch).
+    pub fn set_profiles(&mut self, profiles: Vec<ProfileSummary>, active: String) {
+        self.profiles = profiles;
+        self.active_profile = active;
+    }
+
+    /// Profiles matching the current picker query (substring, case-insensitive).
+    pub fn filtered_profiles(&self) -> Vec<&ProfileSummary> {
+        let query = self.profile_picker_query.to_lowercase();
+        self.profiles
+            .iter()
+            .filter(|p| query.is_empty() || p.name.to_lowercase().contains(&query))
+            .collect()
     }
 
     pub fn rebuild_nav_tree(&mut self) {

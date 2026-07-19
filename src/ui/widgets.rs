@@ -337,10 +337,13 @@ fn render_org_overview(
 }
 
 pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
+    // Active-profile chip (design ④): always visible, marks the current context.
+    let chip = format!("⦗● {}⦆ ", state.active_profile);
+
     let key_hints = if state.search_active {
         "Esc: close search | Enter: filter"
     } else {
-        "j/k: nav | Enter: select | l: log | d: diff | f: filter | /: search | r: refresh | o: open | ?: help | q: quit"
+        "j/k: nav | Enter: select | l: log | d: diff | f: filter | /: search | p: profiles | r: refresh | o: open | ?: help | q: quit"
     };
 
     let status = if state.loading {
@@ -364,10 +367,10 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
 
     let right_text = format!("{}{}", rate_info, refresh_info);
 
-    // Calculate available space
+    // Calculate available space (chip + hints share the left region).
     let total_width = area.width as usize;
-    let left_len = key_hints.len();
-    let right_len = right_text.len();
+    let left_len = chip.chars().count() + key_hints.chars().count();
+    let right_len = right_text.chars().count();
 
     let center_start = left_len + 1;
     let center_width = total_width.saturating_sub(left_len + right_len + 2);
@@ -380,6 +383,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     let padding = center_width.saturating_sub(status_truncated.len());
 
     let line = Line::from(vec![
+        Span::styled(chip, theme::STATUS_CHIP),
         Span::styled(key_hints, theme::STATUS_BAR),
         Span::styled(" ".repeat(center_start.min(1)), theme::STATUS_BAR),
         Span::styled(
@@ -415,6 +419,67 @@ pub fn render_search_overlay(f: &mut Frame, state: &AppState) {
     let para = Paragraph::new(Span::styled(text, theme::HEADER)).style(theme::STATUS_BAR);
     f.render_widget(Clear, search_area);
     f.render_widget(para, search_area);
+}
+
+/// Profile picker overlay (design ①): a centered, type-to-filter modal listing
+/// the configured profiles. Navigate with the arrow keys, `Enter` switches,
+/// `Esc` cancels. Modeled on the search overlay's filtered-list pattern.
+pub fn render_profile_picker(f: &mut Frame, state: &AppState) {
+    if !state.profile_picker_active {
+        return;
+    }
+
+    let modal_area = overlay_area(f, 60, 50);
+    let block = Block::default()
+        .title(" Switch Profile ")
+        .title_bottom(Line::from(Span::styled(
+            " type: filter · ↑/↓: move · Enter: switch · Esc: cancel ",
+            theme::DIM,
+        )))
+        .borders(Borders::ALL)
+        .border_style(theme::BORDER_FOCUSED);
+
+    let filtered = state.filtered_profiles();
+
+    let mut lines: Vec<Line> = Vec::new();
+    // Filter input line.
+    lines.push(Line::from(vec![
+        Span::styled("> ", theme::HEADER),
+        Span::styled(state.profile_picker_query.clone(), theme::HEADER),
+    ]));
+
+    if filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no matching profiles)",
+            theme::DIM,
+        )));
+    } else {
+        for (i, p) in filtered.iter().enumerate() {
+            let marker = if p.name == state.active_profile {
+                "●"
+            } else {
+                " "
+            };
+            let scope = if p.scope_count == 1 {
+                "1 scope".to_string()
+            } else {
+                format!("{} scopes", p.scope_count)
+            };
+            let text = format!("{} {:<16} {} · {}", marker, p.name, scope, p.host);
+            let style = if i == state.profile_picker_cursor {
+                theme::HIGHLIGHT
+            } else if p.name == state.active_profile {
+                theme::MERGE_CLEAN
+            } else {
+                ratatui::style::Style::default()
+            };
+            lines.push(Line::from(Span::styled(text, style)));
+        }
+    }
+
+    f.render_widget(Clear, modal_area);
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, modal_area);
 }
 
 pub fn render_error_modal(f: &mut Frame, area: Rect, state: &AppState) {
@@ -655,7 +720,7 @@ pub fn render_help_overlay(f: &mut Frame, state: &AppState) {
 
     let area = f.area();
     let modal_width = 66u16.clamp(40, area.width.saturating_sub(4));
-    let modal_height = 18u16.min(area.height.saturating_sub(2));
+    let modal_height = 19u16.min(area.height.saturating_sub(2));
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect {
@@ -684,6 +749,10 @@ pub fn render_help_overlay(f: &mut Frame, state: &AppState) {
         key("l", "git-log overlay (content pane)"),
         key("d", "diff overlay (content pane)"),
         key("f", "cycle merge filter: all -> conflicting -> clean"),
+        key(
+            "p",
+            "switch profile (modal picker; active shown in status bar)",
+        ),
         key("/", "search    r  refresh    o  open in browser"),
         key("Tab", "switch pane    h / Esc  back / close    q  quit"),
         Line::from(""),
