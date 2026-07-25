@@ -103,11 +103,62 @@ nav_width_percent = 30
 
 On macOS, `~/Library/Application Support/ghdash/config.toml` is also supported.
 
+### Profiles
+
+Define multiple named profiles to switch between GitHub accounts and/or
+Enterprise instances. Each profile has its own `github`/`dashboard`/`cache`/`ui`
+settings and resolves its own token, `api_url`, and cache namespace, so accounts
+never mix credentials or cached data.
+
+```toml
+# Optional: the profile to start with. Overridden by `--profile` and
+# GHDASH_PROFILE. If unset (or unknown), the first profile is used.
+active_profile = "work"
+
+[[profiles]]
+name = "work"
+[profiles.github]
+orgs = ["my-company"]
+# Name of the env var holding this profile's token (never the token itself).
+token_env = "GHDASH_TOKEN_WORK"
+
+[[profiles]]
+name = "personal"
+[profiles.github]
+users = ["my-username"]
+
+[[profiles]]
+name = "acme-enterprise"
+[profiles.github]
+orgs = ["acme"]
+api_url = "https://ghe.acme.corp/api/graphql"
+token_env = "GHDASH_TOKEN_ACME"
+```
+
+A profile's token is resolved (never persisted) in this order:
+
+1. the env var named by `token_env`
+2. `GITHUB_TOKEN`
+3. `gh auth token --hostname <host>` (uses your `gh` login for that host)
+4. `GH_TOKEN`
+
+Each profile caches under its own subdirectory (`<cache-dir>/<name>/`).
+
+**Back-compat:** with no `[[profiles]]`, the top-level config is treated as a
+single `default` profile and behaves exactly as before (same cache location).
+
+Select the active profile with, in order of precedence:
+
+1. `ghdash --profile <name>`
+2. the `GHDASH_PROFILE` environment variable
+3. the `active_profile` config field
+
 ## Usage
 
 ```sh
 ghdash                     # Start the dashboard
 ghdash --config path.toml  # Use a specific config file
+ghdash --profile work      # Start with the named profile
 ghdash --refresh           # Force refresh all data on startup
 ghdash --no-cache          # Disable disk cache
 ghdash --debug             # Enable debug logging to file

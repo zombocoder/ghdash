@@ -9,12 +9,19 @@ use clap::Parser;
 use std::path::PathBuf;
 use tracing::info;
 
+use util::config::PROFILE_ENV;
+
 #[derive(Parser, Debug)]
 #[command(name = "ghdash", version, about = "TUI GitHub Dashboard")]
 struct Cli {
     /// Path to config file
     #[arg(short, long)]
     config: Option<PathBuf>,
+
+    /// Active profile to start with (overrides `active_profile` in config and the
+    /// GHDASH_PROFILE env var). Falls back to the first profile if unknown.
+    #[arg(short, long)]
+    profile: Option<String>,
 
     /// Disable disk cache
     #[arg(long)]
@@ -40,16 +47,44 @@ async fn main() -> Result<()> {
 
     info!("ghdash starting");
 
-    // Resolve auth token before starting TUI
-    let token = match github::auth::resolve_token() {
+    // Select the active profile: `--profile` flag, else GHDASH_PROFILE env, else
+    // the `active_profile` config field, else the first profile. A requested name
+    // that matches no profile is ignored (falls through), so a stale value
+    // degrades gracefully to the first profile rather than failing.
+    let requested = cli
+        .profile
+        .clone()
+        .or_else(|| std::env::var(PROFILE_ENV).ok().filter(|s| !s.is_empty()));
+    let active_profile = config.active_profile(requested.as_deref());
+    if let Some(name) = &requested
+        && name != &active_profile.name
+    {
+        eprintln!(
+            "Profile '{name}' not found; using '{}' instead.",
+            active_profile.name
+        );
+    }
+
+    // Effective single-context config for the active profile.
+    let effective = active_profile.to_app_config();
+
+    // Resolve this profile's token (by env-var name / GITHUB_TOKEN / gh CLI) and
+    // its api_url. The token value is never stored or logged.
+    let token = match github::auth::resolve_profile_token(
+        effective.github.token_env.as_deref(),
+        &effective.github.api_url,
+    ) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("Authentication error: {e}");
+            eprintln!(
+                "Authentication error for profile '{}': {e}",
+                active_profile.name
+            );
             std::process::exit(1);
         }
     };
 
-    let client = github::GithubClient::new(&token, &config.github.api_url)?;
+    let client = github::GithubClient::new(&token, &effective.github.api_url)?;
 
     // Verify auth by fetching viewer
     let viewer = match client.fetch_viewer().await {
@@ -61,24 +96,31 @@ async fn main() -> Result<()> {
         }
     };
 
-    info!(login = %viewer, "Authenticated as {}", viewer);
+    info!(login = %viewer, profile = %active_profile.name, "Authenticated as {}", viewer);
 
-    if config.github.orgs.is_empty() && config.github.users.is_empty() {
+    if effective.github.orgs.is_empty() && effective.github.users.is_empty() {
         eprintln!(
-            "No organizations or users configured. Please add orgs or users to your config file.\n\
+            "No organizations or users configured for profile '{}'. Please add orgs or users to \
+             your config file.\n\
              Example config (~/.config/ghdash/config.toml):\n\n\
              [github]\n\
              orgs = [\"my-org\"]\n\
-             users = [\"my-username\"]"
+             users = [\"my-username\"]",
+            active_profile.name
         );
         std::process::exit(1);
     }
 
-    // Build cache store
+    // Build cache store from the profile's namespaced cache directory, so profiles
+    // never read each other's cached data. With no [[profiles]] configured, this
+    // is the plain top-level cache dir (unchanged for existing installs).
     let cache_store = if cli.no_cache {
         None
     } else {
-        let store = cache::CacheStore::new(config.cache_dir(), config.cache.ttl_secs);
+        let store = cache::CacheStore::new(
+            config.profile_cache_dir(&active_profile),
+            effective.cache.ttl_secs,
+        );
         if cli.refresh {
             store.invalidate_all()?;
         }
@@ -86,7 +128,7 @@ async fn main() -> Result<()> {
     };
 
     // Run the TUI event loop
-    app::event_loop::run(config, client, viewer, cache_store).await
+    app::event_loop::run(effective, client, viewer, cache_store).await
 }
 
 fn setup_logging(
