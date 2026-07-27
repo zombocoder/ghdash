@@ -336,6 +336,27 @@ fn render_org_overview(
     f.render_widget(para, area);
 }
 
+/// Truncate `status` to fit within `center_width` columns, appending an ellipsis
+/// when it overflows.
+///
+/// The cut is made on a UTF-8 character boundary. Error messages surfaced here
+/// can contain multi-byte characters (GitHub API error bodies, GraphQL messages,
+/// org/repo names), so a naive byte slice at `center_width - 3` could land inside
+/// a multi-byte character and panic (`byte index is not a char boundary`),
+/// crashing the whole TUI draw loop.
+fn truncate_status(status: &str, center_width: usize) -> String {
+    if status.len() <= center_width {
+        return status.to_string();
+    }
+    // Reserve three columns for the trailing ellipsis, then walk the cut point
+    // back to the nearest char boundary so we never split a multi-byte char.
+    let mut end = center_width.saturating_sub(3).min(status.len());
+    while end > 0 && !status.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &status[..end])
+}
+
 pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     let key_hints = if state.search_active {
         "Esc: close search | Enter: filter"
@@ -371,11 +392,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
 
     let center_start = left_len + 1;
     let center_width = total_width.saturating_sub(left_len + right_len + 2);
-    let status_truncated = if status.len() > center_width {
-        format!("{}...", &status[..center_width.saturating_sub(3)])
-    } else {
-        status
-    };
+    let status_truncated = truncate_status(&status, center_width);
 
     let padding = center_width.saturating_sub(status_truncated.len());
 
@@ -714,4 +731,48 @@ pub fn render_help_overlay(f: &mut Frame, state: &AppState) {
     f.render_widget(Clear, modal_area);
     let para = Paragraph::new(lines).block(block);
     f.render_widget(para, modal_area);
+}
+
+#[cfg(test)]
+mod status_truncate_tests {
+    use super::truncate_status;
+
+    #[test]
+    fn returns_status_unchanged_when_it_fits() {
+        assert_eq!(truncate_status("short", 100), "short");
+    }
+
+    #[test]
+    fn truncates_ascii_with_ellipsis() {
+        // "abcdefgh" (8 bytes) into width 6 -> budget 3 -> "abc...".
+        assert_eq!(truncate_status("abcdefgh", 6), "abc...");
+    }
+
+    #[test]
+    fn does_not_panic_when_cut_lands_inside_multibyte_char() {
+        // '—' (em dash, U+2014) is 3 bytes at indices 7..10. With center_width 11
+        // the naive cut is byte 8 — inside the em dash — which panicked before the
+        // fix. The cut must move back to the char boundary at byte 7.
+        let status = "Error: — connection reset by peer (Esc to dismiss)";
+        let out = truncate_status(status, 11);
+        assert_eq!(out, "Error: ...");
+        let prefix = &out[..out.len() - 3];
+        assert!(status.starts_with(prefix));
+    }
+
+    #[test]
+    fn every_width_over_a_multibyte_string_is_panic_free() {
+        // A string dense with multi-byte characters; truncating at *any* width
+        // must never split a char (i.e. must never panic).
+        let status = "错误: naïve — © fïx 🚀 обновление (Esc)";
+        for width in 0..=status.len() + 5 {
+            let out = truncate_status(status, width);
+            // The non-ellipsis prefix is always a valid prefix of the input.
+            let prefix = out.strip_suffix("...").unwrap_or(&out);
+            assert!(
+                status.starts_with(prefix),
+                "width {width} produced non-prefix output {out:?}"
+            );
+        }
+    }
 }
