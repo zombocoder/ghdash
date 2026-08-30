@@ -7,22 +7,22 @@ class Ghdash < Formula
   on_macos do
     on_arm do
       url "https://github.com/zombocoder/ghdash/releases/download/v#{version}/ghdash-aarch64-apple-darwin.tar.gz"
-      sha256 "cdb86f77d8cbb3e7362e2d2668e7b6aa954848c3557f93f76f6837a991db8ddd"
+      sha256 "acc06a979b3aaa3db6d5ef60817115a59349a4788e63e658c232cd17d282ddc2"
     end
     on_intel do
       url "https://github.com/zombocoder/ghdash/releases/download/v#{version}/ghdash-x86_64-apple-darwin.tar.gz"
-      sha256 "aa2048fd3f42d63c3ea1a950f890c4e0d00dfd6fa73f241adeccdee6f00ca426"
+      sha256 "bdbb1f067931484dacda43cdd6250a56a836b5e75da18be1717c66b3d8138b40"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/zombocoder/ghdash/releases/download/v#{version}/ghdash-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "5521d5f11ae54b6b08023bad6f5398eaf8944b0e3f7b2a13f5cb1c128ab1d4e5"
+      sha256 "be0b0b695e2ef2941ff37aafa44dfc595e616fd6a659cbeba2e2714d3988c8c8"
     end
     on_intel do
       url "https://github.com/zombocoder/ghdash/releases/download/v#{version}/ghdash-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "92da4561181bee0956bab5672c092094f195294596fc3e922d4e204871d2d76c"
+      sha256 "20d5ab9937eb7d03d898a25b7f8da5c9f93ee96a961ab1544e9d32f5cf7f9f84"
     end
   end
 
