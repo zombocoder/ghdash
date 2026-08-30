@@ -357,6 +357,27 @@ fn truncate_status(status: &str, center_width: usize) -> String {
     format!("{}...", &status[..end])
 }
 
+/// Right-hand side of the status bar: visibility restriction (when any),
+/// API budget, and time since the last refresh.
+fn right_status_text(state: &AppState) -> String {
+    let visibility_info = state
+        .visibility
+        .label()
+        .map(|l| format!("{} | ", l))
+        .unwrap_or_default();
+
+    let refresh_info = state
+        .last_refresh
+        .as_ref()
+        .map(|t| format!(" | {}", relative_time(t)))
+        .unwrap_or_default();
+
+    format!(
+        "{}API: {}/{}{}",
+        visibility_info, state.rate_limit.remaining, state.rate_limit.limit, refresh_info
+    )
+}
+
 pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     let key_hints = if state.search_active {
         "Esc: close search | Enter: filter"
@@ -372,18 +393,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
         String::new()
     };
 
-    let rate_info = format!(
-        "API: {}/{}",
-        state.rate_limit.remaining, state.rate_limit.limit
-    );
-
-    let refresh_info = state
-        .last_refresh
-        .as_ref()
-        .map(|t| format!(" | {}", relative_time(t)))
-        .unwrap_or_default();
-
-    let right_text = format!("{}{}", rate_info, refresh_info);
+    let right_text = right_status_text(state);
 
     // Calculate available space
     let total_width = area.width as usize;
@@ -774,5 +784,42 @@ mod status_truncate_tests {
                 "width {width} produced non-prefix output {out:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod right_status_text_tests {
+    use super::right_status_text;
+    use crate::app::state::AppState;
+    use crate::github::models::{RateLimit, RepoVisibility};
+
+    fn state() -> AppState {
+        let mut s = AppState::new("me".into(), vec![]);
+        s.rate_limit = RateLimit {
+            remaining: 4999,
+            limit: 5000,
+            reset_at: None,
+        };
+        s
+    }
+
+    #[test]
+    fn shows_only_rate_limit_when_visibility_is_unrestricted() {
+        let s = state();
+        assert_eq!(right_status_text(&s), "API: 4999/5000");
+    }
+
+    #[test]
+    fn announces_a_public_only_session() {
+        let mut s = state();
+        s.visibility = RepoVisibility::Public;
+        assert_eq!(right_status_text(&s), "public only | API: 4999/5000");
+    }
+
+    #[test]
+    fn announces_a_private_only_session() {
+        let mut s = state();
+        s.visibility = RepoVisibility::Private;
+        assert_eq!(right_status_text(&s), "private only | API: 4999/5000");
     }
 }

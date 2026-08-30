@@ -126,15 +126,7 @@ impl GithubClient {
                 .context("Missing repository nodes")?;
 
             for node in nodes {
-                let repo = Repo {
-                    name: node["name"].as_str().unwrap_or("").to_string(),
-                    owner: node["owner"]["login"].as_str().unwrap_or("").to_string(),
-                    url: node["url"].as_str().unwrap_or("").to_string(),
-                    description: node["description"].as_str().map(|s| s.to_string()),
-                    open_pr_count: node["pullRequests"]["totalCount"].as_u64().unwrap_or(0) as u32,
-                    is_archived: node["isArchived"].as_bool().unwrap_or(false),
-                };
-                all_repos.push(repo);
+                all_repos.push(parse_repo(node));
             }
 
             let page_info = &repos_data["pageInfo"];
@@ -169,15 +161,7 @@ impl GithubClient {
                 .context("Missing repository nodes")?;
 
             for node in nodes {
-                let repo = Repo {
-                    name: node["name"].as_str().unwrap_or("").to_string(),
-                    owner: node["owner"]["login"].as_str().unwrap_or("").to_string(),
-                    url: node["url"].as_str().unwrap_or("").to_string(),
-                    description: node["description"].as_str().map(|s| s.to_string()),
-                    open_pr_count: node["pullRequests"]["totalCount"].as_u64().unwrap_or(0) as u32,
-                    is_archived: node["isArchived"].as_bool().unwrap_or(false),
-                };
-                all_repos.push(repo);
+                all_repos.push(parse_repo(node));
             }
 
             let page_info = &repos_data["pageInfo"];
@@ -235,12 +219,12 @@ impl GithubClient {
         Ok((all_prs, rate_limit))
     }
 
-    pub async fn fetch_inbox(&self, viewer_login: &str) -> Result<(Vec<PullRequest>, RateLimit)> {
-        let review_query = format!(
-            "is:open is:pr review-requested:{} archived:false",
-            viewer_login
-        );
-        let assigned_query = format!("is:open is:pr assignee:{} archived:false", viewer_login);
+    pub async fn fetch_inbox(
+        &self,
+        viewer_login: &str,
+        visibility: RepoVisibility,
+    ) -> Result<(Vec<PullRequest>, RateLimit)> {
+        let (review_query, assigned_query) = build_inbox_queries(viewer_login, visibility);
 
         let (review_result, assigned_result) = tokio::join!(
             self.search_prs(&review_query),
@@ -272,16 +256,9 @@ impl GithubClient {
         &self,
         orgs: &[String],
         users: &[String],
+        visibility: RepoVisibility,
     ) -> Result<(Vec<PullRequest>, RateLimit)> {
-        let mut owner_filters: Vec<String> = Vec::new();
-        for o in orgs {
-            owner_filters.push(format!("org:{}", o));
-        }
-        for u in users {
-            owner_filters.push(format!("user:{}", u));
-        }
-        let filter = owner_filters.join(" ");
-        let query_string = format!("is:open is:pr archived:false {}", filter);
+        let query_string = build_all_open_prs_query(orgs, users, visibility);
         self.search_prs(&query_string).await
     }
 
@@ -350,6 +327,55 @@ impl GithubClient {
         let diff = resp.text().await.context("Failed to read PR diff")?;
         debug!(owner, name, number, bytes = diff.len(), "Fetched PR diff");
         Ok(diff)
+    }
+}
+
+/// Search query for the "All PRs" view: every open PR across the configured
+/// orgs and users, narrowed to `visibility`.
+pub fn build_all_open_prs_query(
+    orgs: &[String],
+    users: &[String],
+    visibility: RepoVisibility,
+) -> String {
+    let mut parts = vec![
+        "is:open".to_string(),
+        "is:pr".to_string(),
+        "archived:false".to_string(),
+    ];
+    parts.extend(orgs.iter().map(|o| format!("org:{}", o)));
+    parts.extend(users.iter().map(|u| format!("user:{}", u)));
+    parts.extend(visibility.search_qualifier().map(|q| q.to_string()));
+    parts.join(" ")
+}
+
+/// The two search queries backing the inbox (review-requested + assigned),
+/// each narrowed to `visibility`.
+pub fn build_inbox_queries(viewer_login: &str, visibility: RepoVisibility) -> (String, String) {
+    let suffix = visibility
+        .search_qualifier()
+        .map(|q| format!(" {}", q))
+        .unwrap_or_default();
+    (
+        format!(
+            "is:open is:pr review-requested:{} archived:false{}",
+            viewer_login, suffix
+        ),
+        format!(
+            "is:open is:pr assignee:{} archived:false{}",
+            viewer_login, suffix
+        ),
+    )
+}
+
+fn parse_repo(node: &Value) -> Repo {
+    Repo {
+        name: node["name"].as_str().unwrap_or("").to_string(),
+        owner: node["owner"]["login"].as_str().unwrap_or("").to_string(),
+        url: node["url"].as_str().unwrap_or("").to_string(),
+        description: node["description"].as_str().map(|s| s.to_string()),
+        open_pr_count: node["pullRequests"]["totalCount"].as_u64().unwrap_or(0) as u32,
+        is_archived: node["isArchived"].as_bool().unwrap_or(false),
+        is_private: node["isPrivate"].as_bool().unwrap_or(false),
     }
 }
 

@@ -25,6 +25,7 @@ query($org: String!, $cursor: String) {
         url
         description
         isArchived
+        isPrivate
         pullRequests(states: OPEN) {
           totalCount
         }
@@ -53,6 +54,7 @@ query($user: String!, $cursor: String) {
         url
         description
         isArchived
+        isPrivate
         pullRequests(states: OPEN) {
           totalCount
         }
