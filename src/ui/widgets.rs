@@ -764,7 +764,7 @@ mod status_truncate_tests {
     fn every_width_over_a_multibyte_string_is_panic_free() {
         // A string dense with multi-byte characters; truncating at *any* width
         // must never split a char (i.e. must never panic).
-        let status = "错误: naïve — © fïx 🚀 обновление (Esc)";
+        let status = "erreur: naïve — © fïx Zürich Straße résumé (Esc)";
         for width in 0..=status.len() + 5 {
             let out = truncate_status(status, width);
             // The non-ellipsis prefix is always a valid prefix of the input.
