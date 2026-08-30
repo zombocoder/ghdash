@@ -65,6 +65,7 @@ async fn run_loop(
         .cloned()
         .collect();
     let mut state = AppState::new(viewer_login.clone(), all_owners);
+    state.visibility = config.github.visibility;
 
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<Action>();
     let semaphore = Arc::new(Semaphore::new(4));
@@ -367,6 +368,7 @@ fn spawn_side_effect(
             let cache = cache_store.clone();
             let include_repos = config.github.include_repos.clone();
             let exclude_repos = config.github.exclude_repos.clone();
+            let visibility = config.github.visibility;
             let org_clone = org.clone();
 
             // Mark org as loading via action
@@ -385,7 +387,7 @@ fn spawn_side_effect(
                 if let Some(ref cache) = cache
                     && let Some(repos) = cache.get::<Vec<crate::github::Repo>>(&cache_key)
                 {
-                    let filtered = filter_repos(repos, &include_repos, &exclude_repos);
+                    let filtered = filter_repos(repos, &include_repos, &exclude_repos, visibility);
                     let _ = tx.send(Action::DataLoaded(DataPayload::OrgRepos {
                         org: org_clone,
                         repos: filtered,
@@ -403,7 +405,8 @@ fn spawn_side_effect(
                             error!(error = %e, "Failed to cache org repos");
                         }
 
-                        let filtered = filter_repos(repos, &include_repos, &exclude_repos);
+                        let filtered =
+                            filter_repos(repos, &include_repos, &exclude_repos, visibility);
                         let _ = tx.send(Action::DataLoaded(DataPayload::OrgRepos {
                             org: org_clone,
                             repos: filtered,
@@ -427,6 +430,7 @@ fn spawn_side_effect(
             let cache = cache_store.clone();
             let include_repos = config.github.include_repos.clone();
             let exclude_repos = config.github.exclude_repos.clone();
+            let visibility = config.github.visibility;
             let user_clone = user.clone();
 
             // Mark user as loading via action (reuse OrgRepos payload)
@@ -444,7 +448,7 @@ fn spawn_side_effect(
                 if let Some(ref cache) = cache
                     && let Some(repos) = cache.get::<Vec<crate::github::Repo>>(&cache_key)
                 {
-                    let filtered = filter_repos(repos, &include_repos, &exclude_repos);
+                    let filtered = filter_repos(repos, &include_repos, &exclude_repos, visibility);
                     let _ = tx.send(Action::DataLoaded(DataPayload::OrgRepos {
                         org: user_clone,
                         repos: filtered,
@@ -461,7 +465,8 @@ fn spawn_side_effect(
                             error!(error = %e, "Failed to cache user repos");
                         }
 
-                        let filtered = filter_repos(repos, &include_repos, &exclude_repos);
+                        let filtered =
+                            filter_repos(repos, &include_repos, &exclude_repos, visibility);
                         let _ = tx.send(Action::DataLoaded(DataPayload::OrgRepos {
                             org: user_clone,
                             repos: filtered,
@@ -484,12 +489,16 @@ fn spawn_side_effect(
             let sem = semaphore.clone();
             let cache = cache_store.clone();
             let login = viewer_login.to_string();
+            let visibility = config.github.visibility;
 
             tokio::spawn(async move {
                 let _permit = sem.acquire().await;
                 debug!("Fetching inbox");
 
-                let cache_key = format!("inbox_{}", login);
+                // Visibility is part of the key: a list fetched as "public only"
+                // must never be served to a session running unrestricted, or
+                // vice versa.
+                let cache_key = format!("inbox_{}_{}", login, visibility.cache_suffix());
                 if let Some(ref cache) = cache
                     && let Some(prs) = cache.get::<Vec<crate::github::PullRequest>>(&cache_key)
                 {
@@ -500,7 +509,7 @@ fn spawn_side_effect(
                     return;
                 }
 
-                match client.fetch_inbox(&login).await {
+                match client.fetch_inbox(&login, visibility).await {
                     Ok((prs, rate_limit)) => {
                         if let Some(ref cache) = cache
                             && let Err(e) = cache.set(&cache_key, &prs)
@@ -526,12 +535,13 @@ fn spawn_side_effect(
             let cache = cache_store.clone();
             let orgs = config.github.orgs.clone();
             let users = config.github.users.clone();
+            let visibility = config.github.visibility;
 
             tokio::spawn(async move {
                 let _permit = sem.acquire().await;
                 debug!("Fetching all open PRs");
 
-                let cache_key = "all_open_prs".to_string();
+                let cache_key = format!("all_open_prs_{}", visibility.cache_suffix());
                 if let Some(ref cache) = cache
                     && let Some(prs) = cache.get::<Vec<crate::github::PullRequest>>(&cache_key)
                 {
@@ -542,7 +552,7 @@ fn spawn_side_effect(
                     return;
                 }
 
-                match client.fetch_all_open_prs(&orgs, &users).await {
+                match client.fetch_all_open_prs(&orgs, &users, visibility).await {
                     Ok((prs, rate_limit)) => {
                         if let Some(ref cache) = cache
                             && let Err(e) = cache.set(&cache_key, &prs)
@@ -635,14 +645,19 @@ fn spawn_side_effect(
     }
 }
 
-fn filter_repos(
+pub fn filter_repos(
     repos: Vec<crate::github::Repo>,
     include_patterns: &[String],
     exclude_patterns: &[String],
+    visibility: crate::github::RepoVisibility,
 ) -> Vec<crate::github::Repo> {
     repos
         .into_iter()
         .filter(|repo| {
+            if !visibility.allows(repo.is_private) {
+                return false;
+            }
+
             let full_name = repo.full_name();
             let name = &repo.name;
 

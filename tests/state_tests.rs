@@ -15,6 +15,7 @@ fn make_repo(owner: &str, name: &str, open_prs: u32) -> Repo {
         description: None,
         open_pr_count: open_prs,
         is_archived: false,
+        is_private: false,
     }
 }
 

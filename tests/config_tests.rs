@@ -1,6 +1,7 @@
 use std::io::Write;
 use tempfile::NamedTempFile;
 
+use ghdash::github::models::RepoVisibility;
 use ghdash::util::config::AppConfig;
 
 #[test]
@@ -114,4 +115,56 @@ fn test_default_config() {
     assert_eq!(config.cache.ttl_secs, 600);
     assert!(config.cache.dir.is_none());
     assert_eq!(config.ui.nav_width_percent, 30);
+}
+
+#[test]
+fn test_visibility_defaults_to_all() {
+    let toml = r#"
+[github]
+orgs = ["my-org"]
+"#;
+    let mut f = NamedTempFile::new().unwrap();
+    f.write_all(toml.as_bytes()).unwrap();
+
+    let config = AppConfig::load(Some(f.path())).unwrap();
+    assert_eq!(config.github.visibility, RepoVisibility::All);
+}
+
+#[test]
+fn test_load_public_only_visibility() {
+    let toml = r#"
+[github]
+orgs = ["my-org"]
+visibility = "public"
+"#;
+    let mut f = NamedTempFile::new().unwrap();
+    f.write_all(toml.as_bytes()).unwrap();
+
+    let config = AppConfig::load(Some(f.path())).unwrap();
+    assert_eq!(config.github.visibility, RepoVisibility::Public);
+}
+
+#[test]
+fn test_load_private_only_visibility() {
+    let toml = r#"
+[github]
+visibility = "private"
+"#;
+    let mut f = NamedTempFile::new().unwrap();
+    f.write_all(toml.as_bytes()).unwrap();
+
+    let config = AppConfig::load(Some(f.path())).unwrap();
+    assert_eq!(config.github.visibility, RepoVisibility::Private);
+}
+
+#[test]
+fn test_unknown_visibility_value_fails() {
+    let toml = r#"
+[github]
+visibility = "secret"
+"#;
+    let mut f = NamedTempFile::new().unwrap();
+    f.write_all(toml.as_bytes()).unwrap();
+
+    assert!(AppConfig::load(Some(f.path())).is_err());
 }

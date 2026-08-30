@@ -1,6 +1,59 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Which repositories the dashboard is allowed to show. Configured once via
+/// `github.visibility`; `All` is the default. Restricting it hides matching
+/// repos from the nav tree *and* narrows the PR searches, so nothing from a
+/// hidden repo reaches the screen (useful when screen-sharing or streaming).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RepoVisibility {
+    #[default]
+    All,
+    Public,
+    Private,
+}
+
+impl RepoVisibility {
+    /// Whether a repo with this privacy flag may be shown.
+    pub fn allows(self, is_private: bool) -> bool {
+        match self {
+            RepoVisibility::All => true,
+            RepoVisibility::Public => !is_private,
+            RepoVisibility::Private => is_private,
+        }
+    }
+
+    /// GitHub search qualifier that restricts results to this visibility.
+    /// `None` for `All` (no qualifier needed).
+    pub fn search_qualifier(self) -> Option<&'static str> {
+        match self {
+            RepoVisibility::All => None,
+            RepoVisibility::Public => Some("is:public"),
+            RepoVisibility::Private => Some("is:private"),
+        }
+    }
+
+    /// Status-bar label; `None` when unrestricted.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            RepoVisibility::All => None,
+            RepoVisibility::Public => Some("public only"),
+            RepoVisibility::Private => Some("private only"),
+        }
+    }
+
+    /// Discriminator for cache keys, so PR lists fetched under one visibility
+    /// are never served to a session running under another.
+    pub fn cache_suffix(self) -> &'static str {
+        match self {
+            RepoVisibility::All => "all",
+            RepoVisibility::Public => "public",
+            RepoVisibility::Private => "private",
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewerInfo {
@@ -15,6 +68,10 @@ pub struct Repo {
     pub description: Option<String>,
     pub open_pr_count: u32,
     pub is_archived: bool,
+    /// Required (not `#[serde(default)]`) on purpose: cache entries written
+    /// before this field existed must fail to parse and be refetched rather
+    /// than defaulting private repos to public. See `CacheStore::get`.
+    pub is_private: bool,
 }
 
 impl Repo {

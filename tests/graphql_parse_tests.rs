@@ -9,6 +9,7 @@ fn test_repo_full_name() {
         description: Some("A repo".into()),
         open_pr_count: 5,
         is_archived: false,
+        is_private: false,
     };
     assert_eq!(repo.full_name(), "my-org/my-repo");
 }
@@ -45,6 +46,7 @@ fn test_repo_serialization_roundtrip() {
         description: None,
         open_pr_count: 3,
         is_archived: false,
+        is_private: false,
     };
 
     let json = serde_json::to_string(&repo).unwrap();
@@ -109,6 +111,7 @@ fn test_repo_with_description() {
         description: Some("A cool project".into()),
         open_pr_count: 0,
         is_archived: true,
+        is_private: false,
     };
 
     assert_eq!(repo.description, Some("A cool project".into()));
@@ -253,4 +256,28 @@ fn test_ci_status_none() {
     assert_eq!(pr_with_checks(None).ci_status(), CiStatus::None);
     // Unknown/other states fall back to None rather than misreporting.
     assert_eq!(pr_with_checks(Some("WEIRD")).ci_status(), CiStatus::None);
+}
+
+#[test]
+fn test_repo_visibility_survives_serialization_roundtrip() {
+    let repo = Repo {
+        name: "secret".into(),
+        owner: "acme".into(),
+        url: "https://github.com/acme/secret".into(),
+        description: None,
+        open_pr_count: 0,
+        is_archived: false,
+        is_private: true,
+    };
+
+    let json = serde_json::to_string(&repo).unwrap();
+    let deserialized: Repo = serde_json::from_str(&json).unwrap();
+
+    assert!(deserialized.is_private);
+}
+
+#[test]
+fn test_repo_queries_request_the_is_private_field() {
+    assert!(ghdash::github::queries::ORG_REPOS_QUERY.contains("isPrivate"));
+    assert!(ghdash::github::queries::USER_REPOS_QUERY.contains("isPrivate"));
 }

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::github::models::{PrDetail, PullRequest, RateLimit, Repo};
+use crate::github::models::{PrDetail, PullRequest, RateLimit, Repo, RepoVisibility};
 
 /// State of an on-demand PR detail fetch, keyed by PR url in `AppState::pr_details`.
 #[derive(Debug, Clone)]
@@ -131,6 +131,11 @@ pub struct AppState {
     pub merge_filter: MergeFilter,
     pub help_open: bool,
 
+    /// Repo visibility the session is restricted to (`github.visibility`).
+    /// Read-only here; the fetches are already scoped, this only drives the
+    /// status-bar indicator so a restricted session is visibly restricted.
+    pub visibility: RepoVisibility,
+
     // UI flags
     pub loading: bool,
     pub loading_orgs: HashSet<String>,
@@ -175,6 +180,7 @@ impl AppState {
             diff_scroll: 0,
             merge_filter: MergeFilter::All,
             help_open: false,
+            visibility: RepoVisibility::All,
             loading: true,
             loading_orgs: HashSet::new(),
             error_message: None,

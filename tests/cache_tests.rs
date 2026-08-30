@@ -137,3 +137,33 @@ fn test_creates_cache_dir_on_set() {
     store.set("key", &"val".to_string()).unwrap();
     assert!(nested.exists());
 }
+
+/// Repo cache entries written before `is_private` existed must NOT be reused:
+/// deserializing them would silently mark private repos as public, which would
+/// leak them into a `visibility = "public"` session. `Repo::is_private` is a
+/// required field precisely so those entries fail to parse and are refetched.
+#[test]
+fn test_legacy_repo_cache_entry_without_visibility_is_a_miss() {
+    let dir = TempDir::new().unwrap();
+    let store = CacheStore::new(dir.path().to_path_buf(), 600);
+
+    let legacy = serde_json::json!({
+        "timestamp": chrono::Utc::now(),
+        "data": [{
+            "name": "secret-repo",
+            "owner": "acme",
+            "url": "https://github.com/acme/secret-repo",
+            "description": null,
+            "open_pr_count": 1,
+            "is_archived": false
+        }]
+    });
+    std::fs::write(
+        dir.path().join("org_repos_acme.json"),
+        serde_json::to_string(&legacy).unwrap(),
+    )
+    .unwrap();
+
+    let result: Option<Vec<ghdash::github::models::Repo>> = store.get("org_repos_acme");
+    assert!(result.is_none());
+}

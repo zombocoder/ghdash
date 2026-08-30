@@ -3,6 +3,8 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::github::models::RepoVisibility;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
@@ -27,6 +29,10 @@ pub struct GithubConfig {
     pub exclude_repos: Vec<String>,
     #[serde(default = "default_api_url")]
     pub api_url: String,
+    /// Restrict the whole dashboard to public or private repos. Applies to the
+    /// nav tree and to both PR searches. Defaults to `all`.
+    #[serde(default)]
+    pub visibility: RepoVisibility,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +81,7 @@ impl Default for GithubConfig {
             include_repos: Vec::new(),
             exclude_repos: Vec::new(),
             api_url: default_api_url(),
+            visibility: RepoVisibility::default(),
         }
     }
 }

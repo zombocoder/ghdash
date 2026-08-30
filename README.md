@@ -14,6 +14,7 @@ A terminal UI dashboard for monitoring GitHub repositories, pull requests, and y
 - Inbox view for PRs where you're requested for review or assigned
 - Expand/collapse organizations in the navigation tree
 - Client-side search filtering across PR titles, authors, and repos
+- Restrict the whole dashboard to public-only or private-only repos (handy for streaming)
 - Open any PR or repo in your browser with a single keypress
 - Disk caching with configurable TTL to minimize API calls
 - Auto-refresh on a configurable interval
@@ -81,6 +82,8 @@ users = ["my-username"]
 include_repos = ["important-*"]
 # Optional: exclude repos matching these globs
 exclude_repos = ["*-archived", "legacy-*"]
+# Optional: restrict to public or private repos only (default: "all")
+visibility = "all"
 # Optional: GitHub Enterprise
 # api_url = "https://github.example.com/api/graphql"
 
@@ -102,6 +105,21 @@ nav_width_percent = 30
 ```
 
 On macOS, `~/Library/Application Support/ghdash/config.toml` is also supported.
+
+### Repo visibility
+
+`github.visibility` accepts `all` (default), `public`, or `private`. It applies to
+everything on screen at once — the navigation tree, the "All PRs" view, and the
+inbox — because the PR searches are narrowed with GitHub's `is:public` /
+`is:private` qualifiers rather than filtered after the fact. A restricted session
+says so in the status bar (`public only` / `private only`).
+
+Setting `visibility = "public"` is the intended way to run ghdash while streaming
+or screen-sharing: no private repo name, PR title, or review request reaches the
+screen. Keep a separate config for it and start with `ghdash --config ~/stream.toml`.
+
+Cached PR lists are keyed by visibility, so switching modes never serves data
+fetched under the other one.
 
 ## Usage
 
