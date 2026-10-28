@@ -262,6 +262,75 @@ impl GithubClient {
         self.search_prs(&query_string).await
     }
 
+    pub async fn search_issues(&self, query_string: &str) -> Result<(Vec<Issue>, RateLimit)> {
+        let mut all_issues = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut rate_limit;
+
+        loop {
+            let variables = json!({
+                "query": query_string,
+                "cursor": cursor,
+            });
+
+            let data = self.query(queries::SEARCH_ISSUES_QUERY, variables).await?;
+            rate_limit = Self::extract_rate_limit(&data);
+
+            let search_data = &data["data"]["search"];
+            let nodes = search_data["nodes"]
+                .as_array()
+                .context("Missing search nodes")?;
+
+            for node in nodes {
+                if node.get("number").is_none() {
+                    continue;
+                }
+                all_issues.push(parse_search_issue(node));
+            }
+
+            let page_info = &search_data["pageInfo"];
+            if page_info["hasNextPage"].as_bool().unwrap_or(false) {
+                cursor = page_info["endCursor"].as_str().map(|s| s.to_string());
+            } else {
+                break;
+            }
+        }
+
+        debug!(
+            query = query_string,
+            count = all_issues.len(),
+            "Search issues complete"
+        );
+        Ok((all_issues, rate_limit))
+    }
+
+    /// Open issues assigned to the viewer, narrowed to `visibility` and `filter`.
+    pub async fn fetch_issue_inbox(
+        &self,
+        viewer_login: &str,
+        visibility: RepoVisibility,
+        filter: &str,
+    ) -> Result<(Vec<Issue>, RateLimit)> {
+        let query_string = build_issue_inbox_query(viewer_login, visibility, filter);
+        let (mut issues, rate_limit) = self.search_issues(&query_string).await?;
+        issues.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+        Ok((issues, rate_limit))
+    }
+
+    pub async fn fetch_all_open_issues(
+        &self,
+        orgs: &[String],
+        users: &[String],
+        visibility: RepoVisibility,
+        filter: &str,
+    ) -> Result<(Vec<Issue>, RateLimit)> {
+        let query_string = build_all_open_issues_query(orgs, users, visibility, filter);
+        let (mut issues, rate_limit) = self.search_issues(&query_string).await?;
+        // Search returns best-match order; list most recently updated first.
+        issues.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+        Ok((issues, rate_limit))
+    }
+
     /// Fetch on-demand detail for a single PR (fresh merge state, recent commits,
     /// CI rollup). Used by the detail-on-highlight pane.
     pub async fn fetch_pr_detail(
@@ -367,6 +436,51 @@ pub fn build_inbox_queries(viewer_login: &str, visibility: RepoVisibility) -> (S
     )
 }
 
+/// Search query for the "All Issues" view: every open issue across the
+/// configured orgs and users, narrowed to `visibility`, with the user's
+/// `issues.filter` appended verbatim.
+pub fn build_all_open_issues_query(
+    orgs: &[String],
+    users: &[String],
+    visibility: RepoVisibility,
+    filter: &str,
+) -> String {
+    let mut parts = vec![
+        "is:open".to_string(),
+        "is:issue".to_string(),
+        "archived:false".to_string(),
+    ];
+    parts.extend(orgs.iter().map(|o| format!("org:{}", o)));
+    parts.extend(users.iter().map(|u| format!("user:{}", u)));
+    parts.extend(visibility.search_qualifier().map(|q| q.to_string()));
+    push_filter(&mut parts, filter);
+    parts.join(" ")
+}
+
+/// Search query for the issues inbox: open issues assigned to the viewer.
+pub fn build_issue_inbox_query(
+    viewer_login: &str,
+    visibility: RepoVisibility,
+    filter: &str,
+) -> String {
+    let mut parts = vec![
+        "is:open".to_string(),
+        "is:issue".to_string(),
+        format!("assignee:{}", viewer_login),
+        "archived:false".to_string(),
+    ];
+    parts.extend(visibility.search_qualifier().map(|q| q.to_string()));
+    push_filter(&mut parts, filter);
+    parts.join(" ")
+}
+
+fn push_filter(parts: &mut Vec<String>, filter: &str) {
+    let filter = filter.trim();
+    if !filter.is_empty() {
+        parts.push(filter.to_string());
+    }
+}
+
 fn parse_repo(node: &Value) -> Repo {
     Repo {
         name: node["name"].as_str().unwrap_or("").to_string(),
@@ -374,6 +488,7 @@ fn parse_repo(node: &Value) -> Repo {
         url: node["url"].as_str().unwrap_or("").to_string(),
         description: node["description"].as_str().map(|s| s.to_string()),
         open_pr_count: node["pullRequests"]["totalCount"].as_u64().unwrap_or(0) as u32,
+        open_issue_count: node["issues"]["totalCount"].as_u64().unwrap_or(0) as u32,
         is_archived: node["isArchived"].as_bool().unwrap_or(false),
         is_private: node["isPrivate"].as_bool().unwrap_or(false),
     }
@@ -417,15 +532,49 @@ fn parse_pr_detail(node: &Value) -> PrDetail {
     }
 }
 
-fn parse_search_pr(node: &Value) -> PullRequest {
-    let labels = node["labels"]["nodes"]
+fn parse_labels(node: &Value) -> Vec<String> {
+    node["labels"]["nodes"]
         .as_array()
         .map(|arr| {
             arr.iter()
                 .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
                 .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+pub fn parse_search_issue(node: &Value) -> Issue {
+    Issue {
+        number: node["number"].as_u64().unwrap_or(0) as u32,
+        title: node["title"].as_str().unwrap_or("").to_string(),
+        author: node["author"]["login"]
+            .as_str()
+            .unwrap_or("ghost")
+            .to_string(),
+        repo_owner: node["repository"]["owner"]["login"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        repo_name: node["repository"]["name"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        url: node["url"].as_str().unwrap_or("").to_string(),
+        created_at: node["createdAt"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_default(),
+        updated_at: node["updatedAt"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_default(),
+        labels: parse_labels(node),
+        comment_count: node["comments"]["totalCount"].as_u64().unwrap_or(0) as u32,
+    }
+}
+
+fn parse_search_pr(node: &Value) -> PullRequest {
+    let labels = parse_labels(node);
 
     PullRequest {
         number: node["number"].as_u64().unwrap_or(0) as u32,

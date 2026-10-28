@@ -29,6 +29,9 @@ query($org: String!, $cursor: String) {
         pullRequests(states: OPEN) {
           totalCount
         }
+        issues(states: OPEN) {
+          totalCount
+        }
       }
     }
   }
@@ -56,6 +59,9 @@ query($user: String!, $cursor: String) {
         isArchived
         isPrivate
         pullRequests(states: OPEN) {
+          totalCount
+        }
+        issues(states: OPEN) {
           totalCount
         }
       }
@@ -141,6 +147,42 @@ query($query: String!, $cursor: String) {
               statusCheckRollup { state }
             }
           }
+        }
+        labels(first: 10) {
+          nodes { name }
+        }
+      }
+    }
+  }
+  rateLimit {
+    remaining
+    limit
+    resetAt
+  }
+}
+"#;
+
+pub const SEARCH_ISSUES_QUERY: &str = r#"
+query($query: String!, $cursor: String) {
+  search(query: $query, type: ISSUE, first: 50, after: $cursor) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on Issue {
+        number
+        title
+        author { login }
+        repository {
+          name
+          owner { login }
+        }
+        url
+        createdAt
+        updatedAt
+        comments {
+          totalCount
         }
         labels(first: 10) {
           nodes { name }
