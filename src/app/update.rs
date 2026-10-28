@@ -1,6 +1,7 @@
 use crate::app::actions::{Action, DataPayload, SideEffect};
 use crate::app::state::{
-    AppState, ContentView, DiffEntry, FocusedPane, NavNode, OrgData, Overlay, PrDetailEntry,
+    AppState, ContentView, DiffEntry, FocusedPane, ListMode, NavNode, OrgData, Overlay,
+    PrDetailEntry,
 };
 
 pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
@@ -48,7 +49,7 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
                     }
                 }
                 FocusedPane::Content => {
-                    let max = state.current_pr_list().len().saturating_sub(1);
+                    let max = state.current_item_count().saturating_sub(1);
                     if state.content_cursor < max {
                         state.content_cursor += 1;
                     }
@@ -123,7 +124,11 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
             // Drop cached PR details / diffs so they are re-fetched fresh.
             state.pr_details.clear();
             state.pr_diffs.clear();
-            vec![SideEffect::RefreshAll]
+            // Refresh wipes the disk cache, so the other mode's lists are stale
+            // too; they are refetched the next time that mode is shown.
+            state.loaded_modes.clear();
+            state.loaded_modes.insert(state.mode);
+            vec![SideEffect::RefreshAll(state.mode)]
         }
         Action::OpenInBrowser => {
             let url = match state.focused_pane {
@@ -147,6 +152,9 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
             vec![]
         }
         Action::ToggleGitLog => {
+            if state.mode == ListMode::Issues {
+                return vec![];
+            }
             // Only meaningful in the content pane; the event loop fetches the PR's
             // commits (debounced) while the overlay is open.
             state.overlay = if state.overlay == Overlay::GitLog {
@@ -157,6 +165,9 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
             vec![]
         }
         Action::ToggleDiff => {
+            if state.mode == ListMode::Issues {
+                return vec![];
+            }
             state.diff_scroll = 0;
             state.overlay = if state.overlay == Overlay::Diff {
                 Overlay::None
@@ -174,10 +185,29 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
             vec![]
         }
         Action::CycleMergeFilter => {
+            if state.mode == ListMode::Issues {
+                return vec![];
+            }
             state.merge_filter = state.merge_filter.next();
             // Row set changed; reset the cursor so it stays in range.
             state.content_cursor = 0;
             vec![]
+        }
+        Action::ToggleListMode => {
+            state.mode = state.mode.toggle();
+            state.overlay = Overlay::None;
+            state.content_cursor = 0;
+            state.rebuild_nav_tree();
+            if !state.loaded_modes.insert(state.mode) {
+                return vec![];
+            }
+            state.loading = true;
+            match state.mode {
+                ListMode::PullRequests => vec![SideEffect::FetchInbox, SideEffect::FetchAllOpenPrs],
+                ListMode::Issues => {
+                    vec![SideEffect::FetchIssueInbox, SideEffect::FetchAllOpenIssues]
+                }
+            }
         }
         Action::SearchInput(ch) => {
             if state.search_active {
@@ -217,6 +247,14 @@ pub fn update(state: &mut AppState, action: Action) -> Vec<SideEffect> {
                 DataPayload::AllOpenPrs { prs, rate_limit } => {
                     state.rate_limit = rate_limit;
                     state.all_open_prs = prs;
+                }
+                DataPayload::IssueInbox { issues, rate_limit } => {
+                    state.rate_limit = rate_limit;
+                    state.issue_inbox = issues;
+                }
+                DataPayload::AllOpenIssues { issues, rate_limit } => {
+                    state.rate_limit = rate_limit;
+                    state.all_open_issues = issues;
                 }
                 DataPayload::PrDetailLoaded {
                     key,

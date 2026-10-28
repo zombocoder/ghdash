@@ -67,6 +67,9 @@ pub struct Repo {
     pub url: String,
     pub description: Option<String>,
     pub open_pr_count: u32,
+    /// Required for the same reason as `is_private`: cache entries written
+    /// before issues mode existed are refetched instead of showing 0 issues.
+    pub open_issue_count: u32,
     pub is_archived: bool,
     /// Required (not `#[serde(default)]`) on purpose: cache entries written
     /// before this field existed must fail to parse and be refetched rather
@@ -110,6 +113,26 @@ pub struct PullRequest {
     /// lazily, so the search API returns real values. `None` = no checks / absent.
     #[serde(default)]
     pub checks_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Issue {
+    pub number: u32,
+    pub title: String,
+    pub author: String,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub url: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub labels: Vec<String>,
+    pub comment_count: u32,
+}
+
+impl Issue {
+    pub fn repo_full_name(&self) -> String {
+        format!("{}/{}", self.repo_owner, self.repo_name)
+    }
 }
 
 /// Coarse CI outcome derived from `checks_status`, decoupled from the raw GitHub

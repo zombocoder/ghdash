@@ -1,6 +1,7 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
-use crate::github::models::{PrDetail, PullRequest, RateLimit, Repo, RepoVisibility};
+use crate::github::models::{Issue, PrDetail, PullRequest, RateLimit, Repo, RepoVisibility};
 
 /// State of an on-demand PR detail fetch, keyed by PR url in `AppState::pr_details`.
 #[derive(Debug, Clone)]
@@ -64,12 +65,31 @@ impl MergeFilter {
     }
 }
 
+/// What the whole dashboard lists: pull requests (default) or issues.
+/// Toggled with `i`; the nav tree, content views and counts follow it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ListMode {
+    PullRequests,
+    Issues,
+}
+
+impl ListMode {
+    pub fn toggle(self) -> Self {
+        match self {
+            ListMode::PullRequests => ListMode::Issues,
+            ListMode::Issues => ListMode::PullRequests,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FocusedPane {
     Navigation,
     Content,
 }
 
+/// The PR-named variants are shared by both modes: in `ListMode::Issues`,
+/// `RepoPrList`/`AllOpenPrs`/`Inbox` show the matching issue lists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentView {
     OrgOverview(String),
@@ -84,7 +104,8 @@ pub enum NavNode {
     Repo {
         owner: String,
         name: String,
-        open_prs: u32,
+        /// Open PRs or open issues, depending on the current `ListMode`.
+        open_count: u32,
     },
     AllPrs,
     MyInbox,
@@ -104,9 +125,16 @@ pub struct AppState {
     pub orgs: HashMap<String, OrgData>,
     pub all_open_prs: Vec<PullRequest>,
     pub inbox: Vec<PullRequest>,
+    pub all_open_issues: Vec<Issue>,
+    pub issue_inbox: Vec<Issue>,
     pub viewer_login: String,
     pub rate_limit: RateLimit,
     pub last_refresh: Option<chrono::DateTime<chrono::Utc>>,
+
+    // List mode. `loaded_modes` tracks which modes' lists have been fetched
+    // since the last refresh, so toggling only fetches what's missing.
+    pub mode: ListMode,
+    pub loaded_modes: HashSet<ListMode>,
 
     // Navigation
     pub nav_nodes: Vec<NavNode>,
@@ -115,6 +143,10 @@ pub struct AppState {
     pub focused_pane: FocusedPane,
     pub content_view: ContentView,
     pub content_cursor: usize,
+    /// First visible row of the content table. Owned by the renderer, which
+    /// is the only place that knows the viewport height; kept across frames
+    /// so the view only scrolls when the cursor leaves it.
+    pub content_offset: Cell<usize>,
 
     // Search
     pub search_active: bool,
@@ -163,15 +195,20 @@ impl AppState {
             orgs,
             all_open_prs: Vec::new(),
             inbox: Vec::new(),
+            all_open_issues: Vec::new(),
+            issue_inbox: Vec::new(),
             viewer_login,
             rate_limit: RateLimit::default(),
             last_refresh: None,
+            mode: ListMode::PullRequests,
+            loaded_modes: HashSet::from([ListMode::PullRequests]),
             nav_nodes: Vec::new(),
             nav_cursor: 0,
             nav_expanded,
             focused_pane: FocusedPane::Navigation,
             content_view: ContentView::Inbox,
             content_cursor: 0,
+            content_offset: Cell::new(0),
             search_active: false,
             search_query: String::new(),
             overlay: Overlay::None,
@@ -210,8 +247,8 @@ impl AppState {
             {
                 let mut repos: Vec<_> = org_data.repos.iter().filter(|r| !r.is_archived).collect();
                 repos.sort_by(|a, b| {
-                    b.open_pr_count
-                        .cmp(&a.open_pr_count)
+                    self.repo_open_count(b)
+                        .cmp(&self.repo_open_count(a))
                         .then(a.name.cmp(&b.name))
                 });
 
@@ -219,7 +256,7 @@ impl AppState {
                     nodes.push(NavNode::Repo {
                         owner: repo.owner.clone(),
                         name: repo.name.clone(),
-                        open_prs: repo.open_pr_count,
+                        open_count: self.repo_open_count(repo),
                     });
                 }
             }
@@ -230,6 +267,14 @@ impl AppState {
         // Clamp cursor
         if !self.nav_nodes.is_empty() && self.nav_cursor >= self.nav_nodes.len() {
             self.nav_cursor = self.nav_nodes.len() - 1;
+        }
+    }
+
+    /// Open PRs or open issues for `repo`, depending on the current mode.
+    pub fn repo_open_count(&self, repo: &Repo) -> u32 {
+        match self.mode {
+            ListMode::PullRequests => repo.open_pr_count,
+            ListMode::Issues => repo.open_issue_count,
         }
     }
 
@@ -248,7 +293,12 @@ impl AppState {
             .collect()
     }
 
+    /// The PRs listed in the content pane. Empty in issues mode, which keeps
+    /// the PR-only overlays (git log / diff) from ever targeting a row.
     pub fn current_pr_list(&self) -> Vec<PullRequest> {
+        if self.mode == ListMode::Issues {
+            return Vec::new();
+        }
         let prs = match &self.content_view {
             ContentView::Inbox => &self.inbox,
             ContentView::AllOpenPrs => &self.all_open_prs,
@@ -267,9 +317,67 @@ impl AppState {
         self.filtered_prs(prs)
     }
 
+    pub fn filtered_issues(&self, issues: &[Issue]) -> Vec<Issue> {
+        let query = self.search_query.to_lowercase();
+        issues
+            .iter()
+            .filter(|issue| {
+                query.is_empty()
+                    || issue.title.to_lowercase().contains(&query)
+                    || issue.author.to_lowercase().contains(&query)
+                    || issue.repo_full_name().to_lowercase().contains(&query)
+                    || issue
+                        .labels
+                        .iter()
+                        .any(|l| l.to_lowercase().contains(&query))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The issues listed in the content pane. Empty in PR mode.
+    pub fn current_issue_list(&self) -> Vec<Issue> {
+        if self.mode == ListMode::PullRequests {
+            return Vec::new();
+        }
+        let issues = match &self.content_view {
+            ContentView::Inbox => &self.issue_inbox,
+            ContentView::AllOpenPrs => &self.all_open_issues,
+            ContentView::RepoPrList { owner, name } => {
+                let full_name = format!("{}/{}", owner, name);
+                let filtered: Vec<Issue> = self
+                    .all_open_issues
+                    .iter()
+                    .filter(|issue| issue.repo_full_name() == full_name)
+                    .cloned()
+                    .collect();
+                return self.filtered_issues(&filtered);
+            }
+            ContentView::OrgOverview(_) => return Vec::new(),
+        };
+        self.filtered_issues(issues)
+    }
+
+    /// Number of rows in the content pane for the current mode.
+    pub fn current_item_count(&self) -> usize {
+        match self.mode {
+            ListMode::PullRequests => self.current_pr_list().len(),
+            ListMode::Issues => self.current_issue_list().len(),
+        }
+    }
+
+    /// URL of the highlighted row (PR or issue) in the content pane.
     pub fn selected_pr_url(&self) -> Option<String> {
-        let prs = self.current_pr_list();
-        prs.get(self.content_cursor).map(|pr| pr.url.clone())
+        match self.mode {
+            ListMode::PullRequests => self
+                .current_pr_list()
+                .get(self.content_cursor)
+                .map(|pr| pr.url.clone()),
+            ListMode::Issues => self
+                .current_issue_list()
+                .get(self.content_cursor)
+                .map(|issue| issue.url.clone()),
+        }
     }
 
     /// The currently highlighted PR (in the content pane), cloned.

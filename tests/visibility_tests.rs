@@ -9,6 +9,7 @@ fn repo(name: &str, is_private: bool) -> Repo {
         url: format!("https://github.com/acme/{}", name),
         description: None,
         open_pr_count: 0,
+        open_issue_count: 0,
         is_archived: false,
         is_private,
     }

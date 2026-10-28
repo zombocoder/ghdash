@@ -2,11 +2,11 @@ use ratatui::{
     Frame,
     layout::{Constraint, Rect},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState},
 };
 
 use crate::app::state::{
-    AppState, ContentView, DiffEntry, FocusedPane, NavNode, Overlay, PrDetailEntry,
+    AppState, ContentView, DiffEntry, FocusedPane, ListMode, NavNode, Overlay, PrDetailEntry,
 };
 use crate::github::models::{CiStatus, PrDetail, PullRequest};
 use crate::ui::theme;
@@ -19,8 +19,12 @@ pub fn render_nav_pane(f: &mut Frame, area: Rect, state: &AppState) {
         theme::BORDER_UNFOCUSED
     };
 
+    let nav_title = match state.mode {
+        ListMode::PullRequests => " Pull Requests ",
+        ListMode::Issues => " Issues ",
+    };
     let block = Block::default()
-        .title(" Navigation ")
+        .title(nav_title)
         .borders(Borders::ALL)
         .border_style(border_style);
 
@@ -31,7 +35,10 @@ pub fn render_nav_pane(f: &mut Frame, area: Rect, state: &AppState) {
         .map(|(i, node)| {
             let (text, style) = match node {
                 NavNode::MyInbox => {
-                    let count = state.inbox.len();
+                    let count = match state.mode {
+                        ListMode::PullRequests => state.inbox.len(),
+                        ListMode::Issues => state.issue_inbox.len(),
+                    };
                     let label = if count > 0 {
                         format!("  Inbox ({})", count)
                     } else {
@@ -40,11 +47,14 @@ pub fn render_nav_pane(f: &mut Frame, area: Rect, state: &AppState) {
                     (label, theme::NAV_VIRTUAL)
                 }
                 NavNode::AllPrs => {
-                    let count = state.all_open_prs.len();
+                    let (name, count) = match state.mode {
+                        ListMode::PullRequests => ("All PRs", state.all_open_prs.len()),
+                        ListMode::Issues => ("All Issues", state.all_open_issues.len()),
+                    };
                     let label = if count > 0 {
-                        format!("  All PRs ({})", count)
+                        format!("  {} ({})", name, count)
                     } else {
-                        "  All PRs".to_string()
+                        format!("  {}", name)
                     };
                     (label, theme::NAV_VIRTUAL)
                 }
@@ -69,9 +79,11 @@ pub fn render_nav_pane(f: &mut Frame, area: Rect, state: &AppState) {
                     };
                     (format!("{} {}{}", icon, name, suffix), theme::NAV_ORG)
                 }
-                NavNode::Repo { name, open_prs, .. } => {
-                    let pr_info = if *open_prs > 0 {
-                        format!(" [{}]", open_prs)
+                NavNode::Repo {
+                    name, open_count, ..
+                } => {
+                    let pr_info = if *open_count > 0 {
+                        format!(" [{}]", open_count)
                     } else {
                         String::new()
                     };
@@ -99,6 +111,25 @@ pub fn render_content_pane(f: &mut Frame, area: Rect, state: &AppState) {
     } else {
         theme::BORDER_UNFOCUSED
     };
+
+    if state.mode == ListMode::Issues {
+        match &state.content_view {
+            ContentView::Inbox => {
+                render_issue_table(f, area, state, "Issue Inbox", border_style);
+            }
+            ContentView::AllOpenPrs => {
+                render_issue_table(f, area, state, "All Open Issues", border_style);
+            }
+            ContentView::RepoPrList { owner, name } => {
+                let title = format!("{}/{} issues", owner, name);
+                render_issue_table(f, area, state, &title, border_style);
+            }
+            ContentView::OrgOverview(org) => {
+                render_org_overview(f, area, state, org, border_style);
+            }
+        }
+        return;
+    }
 
     match &state.content_view {
         ContentView::Inbox => {
@@ -265,12 +296,103 @@ fn render_pr_table(
         Constraint::Length(10),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(block)
-        .row_highlight_style(theme::HIGHLIGHT);
+    let table = Table::new(rows, widths).header(header).block(block);
+    render_scrolled_table(f, area, table, state);
+}
 
-    f.render_widget(table, area);
+fn render_issue_table(
+    f: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    title: &str,
+    border_style: ratatui::style::Style,
+) {
+    let issues = state.current_issue_list();
+
+    let search_suffix = if state.search_active && !state.search_query.is_empty() {
+        format!(" [filter: {}]", state.search_query)
+    } else {
+        String::new()
+    };
+    let title = format!(" {} ({}){} ", title, issues.len(), search_suffix);
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    if issues.is_empty() {
+        let msg = if state.loading {
+            "Loading..."
+        } else if state.search_active && !state.search_query.is_empty() {
+            "No matching issues"
+        } else {
+            "No open issues"
+        };
+        let para = Paragraph::new(msg).style(theme::DIM).block(block);
+        f.render_widget(para, area);
+        return;
+    }
+
+    let header = Row::new(vec![
+        Cell::from("#").style(theme::HEADER),
+        Cell::from("Title").style(theme::HEADER),
+        Cell::from("Labels").style(theme::HEADER),
+        Cell::from("Author").style(theme::HEADER),
+        Cell::from("Repo").style(theme::HEADER),
+        Cell::from("💬").style(theme::HEADER),
+        Cell::from("Updated").style(theme::HEADER),
+    ])
+    .height(1);
+
+    let rows: Vec<Row> = issues
+        .iter()
+        .enumerate()
+        .map(|(i, issue)| {
+            let highlighted =
+                i == state.content_cursor && state.focused_pane == FocusedPane::Content;
+            let style = if highlighted {
+                theme::HIGHLIGHT
+            } else {
+                ratatui::style::Style::default()
+            };
+            let or_highlight = |s: ratatui::style::Style| if highlighted { style } else { s };
+
+            Row::new(vec![
+                Cell::from(format!("#{}", issue.number)).style(or_highlight(theme::PR_NUMBER)),
+                Cell::from(issue.title.as_str()).style(style),
+                Cell::from(issue.labels.join(", ")).style(or_highlight(theme::DIM)),
+                Cell::from(issue.author.as_str()).style(or_highlight(theme::PR_AUTHOR)),
+                Cell::from(issue.repo_name.as_str()).style(style),
+                Cell::from(issue.comment_count.to_string()).style(or_highlight(theme::DIM)),
+                Cell::from(relative_time(&issue.updated_at)).style(or_highlight(theme::DIM)),
+            ])
+            .height(1)
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(7),
+        Constraint::Min(20),
+        Constraint::Length(14),
+        Constraint::Length(16),
+        Constraint::Length(24),
+        Constraint::Length(3),
+        Constraint::Length(10),
+    ];
+
+    let table = Table::new(rows, widths).header(header).block(block);
+    render_scrolled_table(f, area, table, state);
+}
+
+/// Render a content table scrolled so the cursor row stays visible. Rows are
+/// already highlighted by hand, so the selection only drives the offset.
+fn render_scrolled_table(f: &mut Frame, area: Rect, table: Table, state: &AppState) {
+    let mut table_state = TableState::default()
+        .with_offset(state.content_offset.get())
+        .with_selected(Some(state.content_cursor));
+    f.render_stateful_widget(table, area, &mut table_state);
+    state.content_offset.set(table_state.offset());
 }
 
 fn render_org_overview(
@@ -296,35 +418,41 @@ fn render_org_overview(
     ];
 
     if let Some(data) = org_data {
+        let unit = match state.mode {
+            ListMode::PullRequests => "PRs",
+            ListMode::Issues => "issues",
+        };
         let active_repos = data.repos.iter().filter(|r| !r.is_archived).count();
-        let total_prs: u32 = data
+        let total: u32 = data
             .repos
             .iter()
             .filter(|r| !r.is_archived)
-            .map(|r| r.open_pr_count)
+            .map(|r| state.repo_open_count(r))
             .sum();
 
         lines.push(Line::from(format!("Repositories: {}", active_repos)));
-        lines.push(Line::from(format!("Open PRs: {}", total_prs)));
+        lines.push(Line::from(format!("Open {}: {}", unit, total)));
         lines.push(Line::from(""));
 
-        // Top repos by PR count
-        let mut repos_with_prs: Vec<_> = data
+        // Top repos by open PR / issue count
+        let mut busy_repos: Vec<_> = data
             .repos
             .iter()
-            .filter(|r| !r.is_archived && r.open_pr_count > 0)
+            .filter(|r| !r.is_archived && state.repo_open_count(r) > 0)
             .collect();
-        repos_with_prs.sort_by_key(|r| std::cmp::Reverse(r.open_pr_count));
+        busy_repos.sort_by_key(|r| std::cmp::Reverse(state.repo_open_count(r)));
 
-        if !repos_with_prs.is_empty() {
+        if !busy_repos.is_empty() {
             lines.push(Line::from(Span::styled(
-                "Top repos by open PRs:",
+                format!("Top repos by open {}:", unit),
                 theme::HEADER,
             )));
-            for repo in repos_with_prs.iter().take(10) {
+            for repo in busy_repos.iter().take(10) {
                 lines.push(Line::from(format!(
-                    "  {} — {} PRs",
-                    repo.name, repo.open_pr_count
+                    "  {} — {} {}",
+                    repo.name,
+                    state.repo_open_count(repo),
+                    unit
                 )));
             }
         }
@@ -357,9 +485,13 @@ fn truncate_status(status: &str, center_width: usize) -> String {
     format!("{}...", &status[..end])
 }
 
-/// Right-hand side of the status bar: visibility restriction (when any),
-/// API budget, and time since the last refresh.
+/// Right-hand side of the status bar: issues mode (when on), visibility
+/// restriction (when any), API budget, and time since the last refresh.
 fn right_status_text(state: &AppState) -> String {
+    let mode_info = match state.mode {
+        ListMode::PullRequests => "",
+        ListMode::Issues => "issues | ",
+    };
     let visibility_info = state
         .visibility
         .label()
@@ -373,8 +505,12 @@ fn right_status_text(state: &AppState) -> String {
         .unwrap_or_default();
 
     format!(
-        "{}API: {}/{}{}",
-        visibility_info, state.rate_limit.remaining, state.rate_limit.limit, refresh_info
+        "{}{}API: {}/{}{}",
+        mode_info,
+        visibility_info,
+        state.rate_limit.remaining,
+        state.rate_limit.limit,
+        refresh_info
     )
 }
 
@@ -382,7 +518,14 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     let key_hints = if state.search_active {
         "Esc: close search | Enter: filter"
     } else {
-        "j/k: nav | Enter: select | l: log | d: diff | f: filter | /: search | r: refresh | o: open | ?: help | q: quit"
+        match state.mode {
+            ListMode::PullRequests => {
+                "j/k: nav | Enter: select | l: log | d: diff | f: filter | i: issues | /: search | r: refresh | o: open | ?: help | q: quit"
+            }
+            ListMode::Issues => {
+                "j/k: nav | Enter: select | i: PRs | /: search | r: refresh | o: open | ?: help | q: quit"
+            }
+        }
     };
 
     let status = if state.loading {
@@ -682,7 +825,7 @@ pub fn render_help_overlay(f: &mut Frame, state: &AppState) {
 
     let area = f.area();
     let modal_width = 66u16.clamp(40, area.width.saturating_sub(4));
-    let modal_height = 18u16.min(area.height.saturating_sub(2));
+    let modal_height = 19u16.min(area.height.saturating_sub(2));
     let x = (area.width.saturating_sub(modal_width)) / 2;
     let y = (area.height.saturating_sub(modal_height)) / 2;
     let modal_area = Rect {
@@ -711,6 +854,7 @@ pub fn render_help_overlay(f: &mut Frame, state: &AppState) {
         key("l", "git-log overlay (content pane)"),
         key("d", "diff overlay (content pane)"),
         key("f", "cycle merge filter: all -> conflicting -> clean"),
+        key("i", "switch between pull requests and issues"),
         key("/", "search    r  refresh    o  open in browser"),
         key("Tab", "switch pane    h / Esc  back / close    q  quit"),
         Line::from(""),
@@ -790,7 +934,7 @@ mod status_truncate_tests {
 #[cfg(test)]
 mod right_status_text_tests {
     use super::right_status_text;
-    use crate::app::state::AppState;
+    use crate::app::state::{AppState, ListMode};
     use crate::github::models::{RateLimit, RepoVisibility};
 
     fn state() -> AppState {
@@ -814,6 +958,17 @@ mod right_status_text_tests {
         let mut s = state();
         s.visibility = RepoVisibility::Public;
         assert_eq!(right_status_text(&s), "public only | API: 4999/5000");
+    }
+
+    #[test]
+    fn announces_issues_mode_before_visibility() {
+        let mut s = state();
+        s.mode = ListMode::Issues;
+        s.visibility = RepoVisibility::Public;
+        assert_eq!(
+            right_status_text(&s),
+            "issues | public only | API: 4999/5000"
+        );
     }
 
     #[test]

@@ -5,13 +5,14 @@
 [![GitHub release](https://img.shields.io/github/v/release/zombocoder/ghdash)](https://github.com/zombocoder/ghdash/releases/latest)
 [![License](https://img.shields.io/github/license/zombocoder/ghdash)](LICENSE)
 
-A terminal UI dashboard for monitoring GitHub repositories, pull requests, and your review inbox. Built with Rust, ratatui, and the GitHub GraphQL API.
+A terminal UI dashboard for monitoring GitHub repositories, pull requests, issues, and your review inbox. Built with Rust, ratatui, and the GitHub GraphQL API.
 
 ## Features
 
 - Monitor repos across multiple GitHub organizations and personal accounts
 - View all open pull requests in one place
 - Inbox view for PRs where you're requested for review or assigned
+- Switch the whole dashboard between pull requests and issues with one key, with an optional search filter for issues
 - Expand/collapse organizations in the navigation tree
 - Client-side search filtering across PR titles, authors, and repos
 - Restrict the whole dashboard to public-only or private-only repos (handy for streaming)
@@ -102,6 +103,10 @@ ttl_secs = 600
 [ui]
 # Navigation pane width percentage (default: 30)
 nav_width_percent = 30
+
+[issues]
+# Optional: extra GitHub search qualifiers for issues mode (default: all open issues)
+# filter = "label:bug -label:wontfix"
 ```
 
 On macOS, `~/Library/Application Support/ghdash/config.toml` is also supported.
@@ -120,6 +125,20 @@ screen. Keep a separate config for it and start with `ghdash --config ~/stream.t
 
 Cached PR lists are keyed by visibility, so switching modes never serves data
 fetched under the other one.
+
+### Issues mode
+
+ghdash starts on pull requests. Press `i` to switch the whole dashboard to
+issues: the nav tree shows open-issue counts per repo, "All Issues" lists every
+open issue across your orgs and users, and the inbox lists issues assigned to
+you. Press `i` again to go back. Issues are only fetched the first time you
+switch, then cached like PRs.
+
+`issues.filter` narrows every issue list (including the inbox). It takes
+[GitHub search syntax](https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests)
+and is appended to `is:open is:issue`, so anything the GitHub search box
+understands works here: `label:bug`, `-label:wontfix`, `no:assignee`,
+`milestone:v1`, `author:alice`. `github.visibility` applies to issues too.
 
 ## Usage
 
@@ -143,6 +162,7 @@ ghdash --help              # Show all options
 | `Tab` / `Shift+Tab`     | Switch between nav and content panes |
 | `r`                     | Refresh all data                     |
 | `o`                     | Open selected item in browser        |
+| `i`                     | Switch between pull requests and issues |
 | `/`                     | Toggle search filter                 |
 | `q` / `Ctrl+C`          | Quit                                 |
 
@@ -150,7 +170,7 @@ ghdash --help              # Show all options
 
 | Key             | Action                               |
 | --------------- | ------------------------------------ |
-| Type            | Filter PRs by title, author, or repo |
+| Type            | Filter by title, author, or repo (issues also by label) |
 | `Backspace`     | Delete character                     |
 | `Esc` / `Enter` | Close search                         |
 
@@ -168,14 +188,14 @@ src/
     view.rs         Layout composition
   github/
     auth.rs         Token resolution (gh CLI / env vars)
-    models.rs       Repo, PullRequest, RateLimit types
+    models.rs       Repo, PullRequest, Issue, RateLimit types
     queries.rs      GraphQL query strings
     graphql.rs      GithubClient with pagination
   cache/
     store.rs        JSON file cache with TTL
   ui/
     theme.rs        Style constants
-    widgets.rs      Rendering functions (nav, PR table, status bar, overlays)
+    widgets.rs      Rendering functions (nav, PR/issue tables, status bar, overlays)
   util/
     config.rs       TOML config with XDG paths
     time.rs         Relative time formatting

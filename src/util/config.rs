@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub cache: CacheConfig,
     #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
+    pub issues: IssuesConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +57,32 @@ pub struct CacheConfig {
 pub struct UiConfig {
     #[serde(default = "default_nav_width")]
     pub nav_width_percent: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IssuesConfig {
+    /// Extra GitHub search qualifiers appended to every issue search
+    /// (e.g. `label:bug -label:wontfix`). Empty = all open issues.
+    #[serde(default)]
+    pub filter: String,
+}
+
+impl IssuesConfig {
+    /// Discriminator for cache keys, so issue lists fetched under one filter
+    /// are never served after the filter changes. FNV-1a keeps it stable
+    /// across runs and filesystem-safe.
+    pub fn cache_suffix(&self) -> String {
+        let filter = self.filter.trim();
+        if filter.is_empty() {
+            return "nofilter".to_string();
+        }
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for byte in filter.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        format!("{:016x}", hash)
+    }
 }
 
 fn default_api_url() -> String {

@@ -1,4 +1,5 @@
-use crate::github::models::{PrDetail, PullRequest, RateLimit, Repo};
+use crate::app::state::ListMode;
+use crate::github::models::{Issue, PrDetail, PullRequest, RateLimit, Repo};
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -16,6 +17,7 @@ pub enum Action {
     CloseOverlay,
     ToggleHelp,
     CycleMergeFilter,
+    ToggleListMode,
     SearchInput(char),
     SearchBackspace,
     SearchClear,
@@ -41,6 +43,14 @@ pub enum DataPayload {
         prs: Vec<PullRequest>,
         rate_limit: RateLimit,
     },
+    IssueInbox {
+        issues: Vec<Issue>,
+        rate_limit: RateLimit,
+    },
+    AllOpenIssues {
+        issues: Vec<Issue>,
+        rate_limit: RateLimit,
+    },
     PrDetailLoaded {
         /// PR url — the key into `AppState::pr_details`.
         key: String,
@@ -64,11 +74,14 @@ pub enum DataPayload {
 
 #[derive(Debug)]
 pub enum SideEffect {
-    RefreshAll,
+    /// Refetch repos plus the lists backing the given mode.
+    RefreshAll(ListMode),
     FetchOrgRepos(String),
     FetchUserRepos(String),
     FetchInbox,
     FetchAllOpenPrs,
+    FetchIssueInbox,
+    FetchAllOpenIssues,
     FetchPrDetail {
         owner: String,
         name: String,

@@ -8,6 +8,7 @@ fn test_repo_full_name() {
         url: "https://github.com/my-org/my-repo".into(),
         description: Some("A repo".into()),
         open_pr_count: 5,
+        open_issue_count: 0,
         is_archived: false,
         is_private: false,
     };
@@ -45,6 +46,7 @@ fn test_repo_serialization_roundtrip() {
         url: "https://github.com/test-owner/test-repo".into(),
         description: None,
         open_pr_count: 3,
+        open_issue_count: 0,
         is_archived: false,
         is_private: false,
     };
@@ -110,6 +112,7 @@ fn test_repo_with_description() {
         url: "https://github.com/owner/repo".into(),
         description: Some("A cool project".into()),
         open_pr_count: 0,
+        open_issue_count: 0,
         is_archived: true,
         is_private: false,
     };
@@ -266,6 +269,7 @@ fn test_repo_visibility_survives_serialization_roundtrip() {
         url: "https://github.com/acme/secret".into(),
         description: None,
         open_pr_count: 0,
+        open_issue_count: 0,
         is_archived: false,
         is_private: true,
     };

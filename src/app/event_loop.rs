@@ -13,7 +13,7 @@ use tokio::sync::{Semaphore, mpsc};
 use tracing::{debug, error};
 
 use crate::app::actions::{Action, DataPayload, SideEffect};
-use crate::app::state::{AppState, DiffEntry, FocusedPane, Overlay, PrDetailEntry};
+use crate::app::state::{AppState, DiffEntry, FocusedPane, ListMode, Overlay, PrDetailEntry};
 use crate::app::update::update;
 use crate::app::view;
 use crate::cache::CacheStore;
@@ -71,7 +71,7 @@ async fn run_loop(
     let semaphore = Arc::new(Semaphore::new(4));
 
     // Initial data fetch
-    let effects = vec![SideEffect::RefreshAll];
+    let effects = vec![SideEffect::RefreshAll(state.mode)];
     for effect in effects {
         spawn_side_effect(
             effect,
@@ -293,6 +293,7 @@ fn map_event_to_action(event: &Event, state: &AppState) -> Option<Action> {
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('o') => Some(Action::OpenInBrowser),
         KeyCode::Char('f') => Some(Action::CycleMergeFilter),
+        KeyCode::Char('i') => Some(Action::ToggleListMode),
         KeyCode::Char('?') => Some(Action::ToggleHelp),
         KeyCode::Char('/') => Some(Action::ToggleSearch),
         _ => None,
@@ -309,7 +310,7 @@ fn spawn_side_effect(
     semaphore: &Arc<Semaphore>,
 ) {
     match effect {
-        SideEffect::RefreshAll => {
+        SideEffect::RefreshAll(mode) => {
             // Invalidate cache so refresh fetches fresh data
             if let Some(cache) = cache_store
                 && let Err(e) = cache.invalidate_all()
@@ -340,26 +341,23 @@ fn spawn_side_effect(
                     semaphore,
                 );
             }
-            // Fetch inbox
-            spawn_side_effect(
-                SideEffect::FetchInbox,
-                config,
-                client,
-                viewer_login,
-                cache_store,
-                action_tx,
-                semaphore,
-            );
-            // Fetch all open PRs
-            spawn_side_effect(
-                SideEffect::FetchAllOpenPrs,
-                config,
-                client,
-                viewer_login,
-                cache_store,
-                action_tx,
-                semaphore,
-            );
+            // Fetch only the lists the current mode shows; the other mode's
+            // lists are fetched when it is toggled to.
+            let (inbox, all_open) = match mode {
+                ListMode::PullRequests => (SideEffect::FetchInbox, SideEffect::FetchAllOpenPrs),
+                ListMode::Issues => (SideEffect::FetchIssueInbox, SideEffect::FetchAllOpenIssues),
+            };
+            for effect in [inbox, all_open] {
+                spawn_side_effect(
+                    effect,
+                    config,
+                    client,
+                    viewer_login,
+                    cache_store,
+                    action_tx,
+                    semaphore,
+                );
+            }
         }
         SideEffect::FetchOrgRepos(org) => {
             let client = client.clone();
@@ -568,6 +566,115 @@ fn spawn_side_effect(
                         error!(error = %e, "Failed to fetch all open PRs");
                         let _ = tx.send(Action::LoadError(format!(
                             "Failed to fetch all open PRs: {}",
+                            e
+                        )));
+                    }
+                }
+            });
+        }
+        SideEffect::FetchIssueInbox => {
+            let client = client.clone();
+            let tx = action_tx.clone();
+            let sem = semaphore.clone();
+            let cache = cache_store.clone();
+            let login = viewer_login.to_string();
+            let visibility = config.github.visibility;
+            let filter = config.issues.filter.clone();
+            let filter_suffix = config.issues.cache_suffix();
+
+            tokio::spawn(async move {
+                let _permit = sem.acquire().await;
+                debug!("Fetching issue inbox");
+
+                // Visibility and filter are part of the key, so neither a
+                // visibility switch nor a filter edit serves stale issues.
+                let cache_key = format!(
+                    "issue_inbox_{}_{}_{}",
+                    login,
+                    visibility.cache_suffix(),
+                    filter_suffix
+                );
+                if let Some(ref cache) = cache
+                    && let Some(issues) = cache.get::<Vec<crate::github::Issue>>(&cache_key)
+                {
+                    let _ = tx.send(Action::DataLoaded(DataPayload::IssueInbox {
+                        issues,
+                        rate_limit: crate::github::RateLimit::default(),
+                    }));
+                    return;
+                }
+
+                match client.fetch_issue_inbox(&login, visibility, &filter).await {
+                    Ok((issues, rate_limit)) => {
+                        if let Some(ref cache) = cache
+                            && let Err(e) = cache.set(&cache_key, &issues)
+                        {
+                            error!(error = %e, "Failed to cache issue inbox");
+                        }
+                        let _ = tx.send(Action::DataLoaded(DataPayload::IssueInbox {
+                            issues,
+                            rate_limit,
+                        }));
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to fetch issue inbox");
+                        let _ = tx.send(Action::LoadError(format!(
+                            "Failed to fetch issue inbox: {}",
+                            e
+                        )));
+                    }
+                }
+            });
+        }
+        SideEffect::FetchAllOpenIssues => {
+            let client = client.clone();
+            let tx = action_tx.clone();
+            let sem = semaphore.clone();
+            let cache = cache_store.clone();
+            let orgs = config.github.orgs.clone();
+            let users = config.github.users.clone();
+            let visibility = config.github.visibility;
+            let filter = config.issues.filter.clone();
+            let filter_suffix = config.issues.cache_suffix();
+
+            tokio::spawn(async move {
+                let _permit = sem.acquire().await;
+                debug!("Fetching all open issues");
+
+                let cache_key = format!(
+                    "all_open_issues_{}_{}",
+                    visibility.cache_suffix(),
+                    filter_suffix
+                );
+                if let Some(ref cache) = cache
+                    && let Some(issues) = cache.get::<Vec<crate::github::Issue>>(&cache_key)
+                {
+                    let _ = tx.send(Action::DataLoaded(DataPayload::AllOpenIssues {
+                        issues,
+                        rate_limit: crate::github::RateLimit::default(),
+                    }));
+                    return;
+                }
+
+                match client
+                    .fetch_all_open_issues(&orgs, &users, visibility, &filter)
+                    .await
+                {
+                    Ok((issues, rate_limit)) => {
+                        if let Some(ref cache) = cache
+                            && let Err(e) = cache.set(&cache_key, &issues)
+                        {
+                            error!(error = %e, "Failed to cache all open issues");
+                        }
+                        let _ = tx.send(Action::DataLoaded(DataPayload::AllOpenIssues {
+                            issues,
+                            rate_limit,
+                        }));
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to fetch all open issues");
+                        let _ = tx.send(Action::LoadError(format!(
+                            "Failed to fetch all open issues: {}",
                             e
                         )));
                     }

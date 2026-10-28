@@ -14,6 +14,7 @@ fn make_repo(owner: &str, name: &str, open_prs: u32) -> Repo {
         url: format!("https://github.com/{}/{}", owner, name),
         description: None,
         open_pr_count: open_prs,
+        open_issue_count: 0,
         is_archived: false,
         is_private: false,
     }
@@ -279,7 +280,7 @@ fn test_refresh_returns_side_effect() {
     assert!(state.loading);
     assert!(state.error_message.is_none());
     assert_eq!(effects.len(), 1);
-    assert!(matches!(effects[0], SideEffect::RefreshAll));
+    assert!(matches!(effects[0], SideEffect::RefreshAll(_)));
 }
 
 // --- Search ---
